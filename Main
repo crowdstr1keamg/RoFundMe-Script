@@ -1,6 +1,6 @@
 --// CONFIG
 local PLACE_ID = 137532437639931
-local COUNTDOWN_TIME = 900 -- 15 minutes
+local COUNTDOWN_TIME = 900
 local ANTI_AFK_INTERVAL = 300
 local WEBHOOK_URL = "https://discord.com/api/webhooks/1460256968332804291/h4SXIYVAhKsNgfnVJIgC5NPZd2VZ2b1w_xHXEBEl9jEYzXOivretwzaWzp5Rfbfq8Su2"
 
@@ -10,184 +10,203 @@ local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local VirtualUser = game:GetService("VirtualUser")
 local MarketplaceService = game:GetService("MarketplaceService")
+local Stats = game:GetService("Stats")
 
 local player = Players.LocalPlayer
-
 local httpRequest = request or http_request or (syn and syn.request)
-
---// SAFETY
 if game.PlaceId ~= PLACE_ID then return end
 
+--// WAIT SAFE
+if not game:IsLoaded() then game.Loaded:Wait() end
+player.CharacterAdded:Wait()
+
+local startTime = os.time()
+
 --// WEBHOOK
-local function sendWebhook(title, desc)
+local function sendWebhook(title, fields)
     if not httpRequest then return end
-    pcall(function()
-        httpRequest({
-            Url = WEBHOOK_URL,
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = HttpService:JSONEncode({
-                embeds = {{
-                    title = title,
-                    description = desc,
-                    color = 65535,
-                    footer = {
-                        text = "Auto Booth | JobId: "..game.JobId
-                    },
-                    timestamp = DateTime.now():ToIsoDate()
-                }}
-            })
+
+    local embedFields = {}
+    for k,v in pairs(fields) do
+        table.insert(embedFields, {
+            name = k,
+            value = tostring(v),
+            inline = true
         })
-    end)
+    end
+
+    httpRequest({
+        Url = WEBHOOK_URL,
+        Method = "POST",
+        Headers = {["Content-Type"] = "application/json"},
+        Body = HttpService:JSONEncode({
+            embeds = {{
+                title = title,
+                color = 5793266,
+                fields = embedFields,
+                footer = {
+                    text = "AutoBooth • JobId: "..game.JobId
+                },
+                timestamp = DateTime.now():ToIsoDate()
+            }}
+        })
+    })
 end
 
-sendWebhook(
-    "Script Launched",
-    "**User:** "..player.Name..
-    "\n**UserId:** "..player.UserId..
-    "\n**PlaceId:** "..game.PlaceId
-)
+--// INITIAL LOG
+sendWebhook("Script Started", {
+    User = player.Name,
+    DisplayName = player.DisplayName,
+    UserId = player.UserId,
+    PlaceId = game.PlaceId,
+    JobId = game.JobId
+})
 
 --// LEADERSTATS
-local ls = player:WaitForChild("leaderstats", 10)
-if not ls then return end
-local Raised = ls:FindFirstChild("Raised")
-local Donated = ls:FindFirstChild("Donated")
-if not Raised or not Donated then return end
+local ls = player:WaitForChild("leaderstats")
+local Raised = ls:WaitForChild("Raised")
+local Donated = ls:WaitForChild("Donated")
+
+--// UI (FIXED)
+local gui = Instance.new("ScreenGui")
+gui.Name = "AutoBoothUI"
+gui.ResetOnSpawn = false
+gui.Parent = game.CoreGui
+
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.fromScale(0.3, 0.35)
+frame.Position = UDim2.fromScale(0.35, 0.32)
+frame.BackgroundColor3 = Color3.fromRGB(18,18,24)
+frame.Active = true
+frame.Draggable = true
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0,16)
+
+local title = Instance.new("TextLabel", frame)
+title.Size = UDim2.fromScale(1,0.2)
+title.BackgroundTransparency = 1
+title.Text = "Auto Booth • "..player.Name
+title.TextColor3 = Color3.new(1,1,1)
+title.Font = Enum.Font.GothamBold
+title.TextScaled = true
+
+local close = Instance.new("TextButton", frame)
+close.Size = UDim2.fromScale(0.12,0.14)
+close.Position = UDim2.fromScale(0.86,0.03)
+close.Text = "X"
+close.TextScaled = true
+close.BackgroundColor3 = Color3.fromRGB(170,60,60)
+close.TextColor3 = Color3.new(1,1,1)
+Instance.new("UICorner", close)
+close.MouseButton1Click:Connect(function()
+    gui.Enabled = false
+end)
 
 --// CHARACTER
-local function getHRP()
-    local char = player.Character or player.CharacterAdded:Wait()
-    return char:WaitForChild("HumanoidRootPart")
+local function hrp()
+    return player.Character:WaitForChild("HumanoidRootPart")
 end
 
---// GET SAFE TELEPORT PART
-local function getAnyPart(model)
-    for _, v in ipairs(model:GetDescendants()) do
-        if v:IsA("BasePart") then
-            return v
-        end
+--// MARKETPLACE DETECT (VIP FAILSAFE)
+local vipTriggered = false
+MarketplaceService.PromptProductPurchaseRequested:Connect(function(plr)
+    if plr == player then
+        vipTriggered = true
+    end
+end)
+
+--// FIND PART
+local function getPart(model)
+    for _,v in ipairs(model:GetDescendants()) do
+        if v:IsA("BasePart") then return v end
     end
 end
 
---// VIP BOOTH CHECK
-local function isVIPBooth(booth)
-    -- Known VIP signs
-    if booth:GetAttribute("VIP") then return true end
-    if booth.Name:lower():find("vip") then return true end
-
-    -- Purchase-triggering prompt
-    local prompt = booth:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if prompt and prompt.ObjectText and prompt.ObjectText:lower():find("robux") then
-        return true
-    end
-
-    return false
-end
-
---// FIND UNCLAIMED NON-VIP BOOTH
+--// FIND BOOTH
 local function findBooth()
-    local stands = workspace:WaitForChild("Stands", 10)
-    if not stands then return end
-
-    for _, booth in ipairs(stands:GetChildren()) do
-        local claimed = booth:FindFirstChild("ClaimedName")
-        if claimed and claimed:IsA("StringValue") and claimed.Value == "" then
-            if not isVIPBooth(booth) then
-                return booth
-            else
-                sendWebhook(
-                    "Skipped VIP Booth",
-                    "**Booth:** "..booth.Name
-                )
-            end
+    for _,b in ipairs(workspace.Stands:GetChildren()) do
+        local c = b:FindFirstChild("ClaimedName")
+        if c and c.Value == "" then
+            return b
         end
     end
 end
 
---// CLAIM
+--// CLAIM BOOTH (REAL CHECK)
 local function claimBooth(booth)
-    local hrp = getHRP()
-    local part = getAnyPart(booth)
+    local claimed = booth:FindFirstChild("ClaimedName")
+    local part = getPart(booth)
     if not part then return false end
 
-    hrp.CFrame = part.CFrame + Vector3.new(0, 3, 0)
+    hrp().CFrame = part.CFrame * CFrame.new(0,0,-2)
     task.wait(1)
 
     local prompt = booth:FindFirstChildWhichIsA("ProximityPrompt", true)
     if not prompt then return false end
 
-    fireproximityprompt(prompt)
-    task.wait(2)
-
-    sendWebhook(
-        "Booth Claimed",
-        "**Booth:** "..booth.Name..
-        "\n**Raised:** "..Raised.Value..
-        "\n**Donated:** "..Donated.Value
-    )
-
-    return true
-end
-
---// TELEPORT TO TOP
-local function teleportTop(booth)
-    local galaxy = booth:FindFirstChild("GalaxyBooth")
-    if not galaxy then return end
-    local part = galaxy:FindFirstChild("BootomPartFix")
-    if not part then return end
-
-    getHRP().CFrame = part.CFrame + Vector3.new(0, 5, 0)
-end
-
---// SERVER HOP
-local function hop(reason)
-    sendWebhook(
-        "Server Hop",
-        "**Reason:** "..reason..
-        "\n**Raised:** "..Raised.Value
-    )
-    TeleportService:Teleport(game.PlaceId, player)
+    for i=1,5 do
+        fireproximityprompt(prompt)
+        task.wait(1)
+        if claimed.Value == player.Name then
+            return true
+        end
+        if vipTriggered then
+            sendWebhook("VIP Booth Detected", {
+                Booth = booth.Name,
+                Action = "Skipped"
+            })
+            return false
+        end
+    end
+    return false
 end
 
 --// MAIN
 task.spawn(function()
-    task.wait(3)
+    task.wait(2)
 
     local booth = findBooth()
     if not booth then
-        hop("No valid booth found")
+        sendWebhook("Hop", { Reason = "No booths" })
+        TeleportService:Teleport(game.PlaceId, player)
         return
     end
+
+    sendWebhook("Booth Found", {
+        Booth = booth.Name,
+        ClaimedName = booth.ClaimedName.Value
+    })
 
     if not claimBooth(booth) then
-        hop("Failed to claim booth")
+        sendWebhook("Claim Failed", {
+            Booth = booth.Name
+        })
+        TeleportService:Teleport(game.PlaceId, player)
         return
     end
 
-    teleportTop(booth)
+    sendWebhook("Booth Claimed CONFIRMED", {
+        Booth = booth.Name,
+        Raised = Raised.Value,
+        Donated = Donated.Value
+    })
 
     local lastRaised = Raised.Value
 
     while true do
-        local t = COUNTDOWN_TIME
-        while t > 0 do
-            task.wait(1)
-            t -= 1
-            if Raised.Value > lastRaised then
-                sendWebhook(
-                    "Donation Received",
-                    "**Amount:** "..(Raised.Value - lastRaised)..
-                    "\n**Total Raised:** "..Raised.Value
-                )
-                lastRaised = Raised.Value
-                break
-            end
-        end
-
+        task.wait(COUNTDOWN_TIME)
         if Raised.Value == lastRaised then
-            hop("No donations in 15 minutes")
+            sendWebhook("No Donations", {
+                Duration = "15 minutes",
+                Raised = Raised.Value
+            })
+            TeleportService:Teleport(game.PlaceId, player)
             break
+        else
+            sendWebhook("Donation Received", {
+                Gained = Raised.Value - lastRaised,
+                Total = Raised.Value
+            })
+            lastRaised = Raised.Value
         end
     end
 end)
