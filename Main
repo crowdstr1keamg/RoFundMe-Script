@@ -9,215 +9,184 @@ local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local VirtualUser = game:GetService("VirtualUser")
+local MarketplaceService = game:GetService("MarketplaceService")
 
 local player = Players.LocalPlayer
 
---// HTTP REQUEST WRAPPER
-local httpRequest =
-    request or http_request or (syn and syn.request)
+local httpRequest = request or http_request or (syn and syn.request)
 
---// PLACE CHECK
-if game.PlaceId ~= PLACE_ID then
-    warn("Wrong place.")
-    return
-end
+--// SAFETY
+if game.PlaceId ~= PLACE_ID then return end
 
---// WEBHOOK FUNCTION
-local function sendWebhook(title, description)
+--// WEBHOOK
+local function sendWebhook(title, desc)
     if not httpRequest then return end
-
-    local data = {
-        embeds = {{
-            title = title,
-            description = description,
-            color = 65280,
-            footer = {
-                text = "Auto Booth Script"
-            },
-            timestamp = DateTime.now():ToIsoDate()
-        }}
-    }
-
     pcall(function()
         httpRequest({
             Url = WEBHOOK_URL,
             Method = "POST",
             Headers = {["Content-Type"] = "application/json"},
-            Body = HttpService:JSONEncode(data)
+            Body = HttpService:JSONEncode({
+                embeds = {{
+                    title = title,
+                    description = desc,
+                    color = 65535,
+                    footer = {
+                        text = "Auto Booth | JobId: "..game.JobId
+                    },
+                    timestamp = DateTime.now():ToIsoDate()
+                }}
+            })
         })
     end)
 end
 
 sendWebhook(
-    "Script Started",
-    "**User:** "..player.Name.."\n**UserId:** "..player.UserId
+    "Script Launched",
+    "**User:** "..player.Name..
+    "\n**UserId:** "..player.UserId..
+    "\n**PlaceId:** "..game.PlaceId
 )
 
 --// LEADERSTATS
-local leaderstats = player:WaitForChild("leaderstats", 10)
-if not leaderstats then return end
-
-local Raised = leaderstats:FindFirstChild("Raised")
-local Donated = leaderstats:FindFirstChild("Donated")
+local ls = player:WaitForChild("leaderstats", 10)
+if not ls then return end
+local Raised = ls:FindFirstChild("Raised")
+local Donated = ls:FindFirstChild("Donated")
 if not Raised or not Donated then return end
 
---// UI
-local gui = Instance.new("ScreenGui", game.CoreGui)
-gui.Name = "AutoBoothGUI"
-gui.ResetOnSpawn = false
-
-local main = Instance.new("Frame", gui)
-main.Size = UDim2.fromScale(0.32, 0.38)
-main.Position = UDim2.fromScale(0.34, 0.3)
-main.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-main.BorderSizePixel = 0
-main.Active = true
-main.Draggable = true
-Instance.new("UICorner", main).CornerRadius = UDim.new(0, 14)
-
-local title = Instance.new("TextLabel", main)
-title.Size = UDim2.fromScale(1, 0.18)
-title.BackgroundTransparency = 1
-title.Text = "Welcome, "..player.Name
-title.TextColor3 = Color3.new(1,1,1)
-title.Font = Enum.Font.GothamBold
-title.TextScaled = true
-
-local avatar = Instance.new("ImageLabel", main)
-avatar.Size = UDim2.fromScale(0.18, 0.28)
-avatar.Position = UDim2.fromScale(0.04, 0.22)
-avatar.BackgroundTransparency = 1
-avatar.Image = Players:GetUserThumbnailAsync(
-    player.UserId,
-    Enum.ThumbnailType.HeadShot,
-    Enum.ThumbnailSize.Size420x420
-)
-
-local close = Instance.new("TextButton", main)
-close.Size = UDim2.fromScale(0.1, 0.12)
-close.Position = UDim2.fromScale(0.88, 0.02)
-close.Text = "X"
-close.Font = Enum.Font.GothamBold
-close.TextScaled = true
-close.BackgroundColor3 = Color3.fromRGB(170, 60, 60)
-close.TextColor3 = Color3.new(1,1,1)
-Instance.new("UICorner", close)
-
-close.MouseButton1Click:Connect(function()
-    gui:Destroy()
-end)
-
-local toggles = Instance.new("Frame", main)
-toggles.Size = UDim2.fromScale(0.7, 0.55)
-toggles.Position = UDim2.fromScale(0.26, 0.28)
-toggles.BackgroundTransparency = 1
-
-local function createToggle(text, order)
-    local btn = Instance.new("TextButton", toggles)
-    btn.Size = UDim2.fromScale(1, 0.22)
-    btn.Position = UDim2.fromScale(0, (order-1)*0.26)
-    btn.Text = text..": ON"
-    btn.Font = Enum.Font.Gotham
-    btn.TextScaled = true
-    btn.BackgroundColor3 = Color3.fromRGB(60,180,120)
-    btn.TextColor3 = Color3.new(1,1,1)
-    Instance.new("UICorner", btn)
-
-    local state = true
-    btn.MouseButton1Click:Connect(function()
-        state = not state
-        btn.Text = text..": "..(state and "ON" or "OFF")
-        btn.BackgroundColor3 = state and Color3.fromRGB(60,180,120)
-            or Color3.fromRGB(180,60,60)
-    end)
-
-    return function() return state end
+--// CHARACTER
+local function getHRP()
+    local char = player.Character or player.CharacterAdded:Wait()
+    return char:WaitForChild("HumanoidRootPart")
 end
 
-local autoClaim = createToggle("Auto Claim Booth", 1)
-local autoHop = createToggle("Server Hop", 2)
-local antiAFKToggle = createToggle("Anti-AFK", 3)
+--// GET SAFE TELEPORT PART
+local function getAnyPart(model)
+    for _, v in ipairs(model:GetDescendants()) do
+        if v:IsA("BasePart") then
+            return v
+        end
+    end
+end
 
---// BOOTH FIND
-local function findUnclaimedBooth()
+--// VIP BOOTH CHECK
+local function isVIPBooth(booth)
+    -- Known VIP signs
+    if booth:GetAttribute("VIP") then return true end
+    if booth.Name:lower():find("vip") then return true end
+
+    -- Purchase-triggering prompt
+    local prompt = booth:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and prompt.ObjectText and prompt.ObjectText:lower():find("robux") then
+        return true
+    end
+
+    return false
+end
+
+--// FIND UNCLAIMED NON-VIP BOOTH
+local function findBooth()
     local stands = workspace:WaitForChild("Stands", 10)
     if not stands then return end
 
     for _, booth in ipairs(stands:GetChildren()) do
         local claimed = booth:FindFirstChild("ClaimedName")
         if claimed and claimed:IsA("StringValue") and claimed.Value == "" then
-            return booth
+            if not isVIPBooth(booth) then
+                return booth
+            else
+                sendWebhook(
+                    "Skipped VIP Booth",
+                    "**Booth:** "..booth.Name
+                )
+            end
         end
     end
 end
 
+--// CLAIM
 local function claimBooth(booth)
-    local hrp = player.Character:WaitForChild("HumanoidRootPart")
-    hrp.CFrame = booth.PrimaryPart.CFrame + Vector3.new(0, 3, 0)
+    local hrp = getHRP()
+    local part = getAnyPart(booth)
+    if not part then return false end
+
+    hrp.CFrame = part.CFrame + Vector3.new(0, 3, 0)
     task.wait(1)
 
     local prompt = booth:FindFirstChildWhichIsA("ProximityPrompt", true)
-    if prompt then
-        fireproximityprompt(prompt)
-        sendWebhook(
-            "Booth Claimed",
-            "**User:** "..player.Name.."\n**Booth:** "..booth.Name
-        )
-    end
+    if not prompt then return false end
+
+    fireproximityprompt(prompt)
+    task.wait(2)
+
+    sendWebhook(
+        "Booth Claimed",
+        "**Booth:** "..booth.Name..
+        "\n**Raised:** "..Raised.Value..
+        "\n**Donated:** "..Donated.Value
+    )
+
+    return true
 end
 
-local function teleportToTop(booth)
-    local hrp = player.Character:WaitForChild("HumanoidRootPart")
+--// TELEPORT TO TOP
+local function teleportTop(booth)
     local galaxy = booth:FindFirstChild("GalaxyBooth")
-    if galaxy then
-        local part = galaxy:FindFirstChild("BootomPartFix")
-        if part then
-            hrp.CFrame = part.CFrame + Vector3.new(0, 4, 0)
-        end
-    end
+    if not galaxy then return end
+    local part = galaxy:FindFirstChild("BootomPartFix")
+    if not part then return end
+
+    getHRP().CFrame = part.CFrame + Vector3.new(0, 5, 0)
 end
 
 --// SERVER HOP
-local function serverHop()
+local function hop(reason)
     sendWebhook(
         "Server Hop",
-        "**User:** "..player.Name.."\nNo donations received in 15 minutes."
+        "**Reason:** "..reason..
+        "\n**Raised:** "..Raised.Value
     )
     TeleportService:Teleport(game.PlaceId, player)
 end
 
---// MAIN LOGIC
+--// MAIN
 task.spawn(function()
-    task.wait(2)
+    task.wait(3)
 
-    local booth = findUnclaimedBooth()
-    if booth and autoClaim() then
-        claimBooth(booth)
-        task.wait(2)
-        teleportToTop(booth)
+    local booth = findBooth()
+    if not booth then
+        hop("No valid booth found")
+        return
     end
+
+    if not claimBooth(booth) then
+        hop("Failed to claim booth")
+        return
+    end
+
+    teleportTop(booth)
 
     local lastRaised = Raised.Value
 
     while true do
-        local timer = COUNTDOWN_TIME
-        while timer > 0 do
+        local t = COUNTDOWN_TIME
+        while t > 0 do
             task.wait(1)
-            timer -= 1
-
+            t -= 1
             if Raised.Value > lastRaised then
                 sendWebhook(
                     "Donation Received",
-                    "**User:** "..player.Name..
-                    "\n**Raised Increased:** "..(Raised.Value - lastRaised)
+                    "**Amount:** "..(Raised.Value - lastRaised)..
+                    "\n**Total Raised:** "..Raised.Value
                 )
                 lastRaised = Raised.Value
                 break
             end
         end
 
-        if Raised.Value == lastRaised and autoHop() then
-            serverHop()
+        if Raised.Value == lastRaised then
+            hop("No donations in 15 minutes")
             break
         end
     end
@@ -227,9 +196,7 @@ end)
 task.spawn(function()
     while true do
         task.wait(ANTI_AFK_INTERVAL)
-        if antiAFKToggle() then
-            VirtualUser:CaptureController()
-            VirtualUser:ClickButton2(Vector2.new())
-        end
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
     end
 end)
