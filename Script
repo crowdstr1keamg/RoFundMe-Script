@@ -1,14 +1,14 @@
 --[[
     💎 GEMINI PRO | AUTO-BOOTH SYSTEM (RoFundMe)
-    Version: 2.7
-    Optimized for RoFundMe's specific folder structure and stats.
+    Version: 3.0 (Ultimate Build)
+    Features: Premium UI, Fixed Webhook, No Rotation, Anti-AFK.
 ]]
 
 --// CONFIGURATION
 local CONFIG = {
     Webhook = "https://discord.com/api/webhooks/1460256968332804291/h4SXIYVAhKsNgfnVJIgC5NPZd2VZ2b1w_xHXEBEl9jEYzXOivretwzaWzp5Rfbfq8Su2", 
-    PlaceID = 137532437639931, -- Your specific RoFundMe ID
-    Countdown = 900, -- 15 Minutes before server hop
+    PlaceID = 137532437639931,
+    Countdown = 900, -- 15 Minutes
     LowGraphics = true,
     RejoinEnabled = true,
     Messages = {
@@ -33,95 +33,92 @@ local player = Players.LocalPlayer
 local sessionRaised = 0
 local startTime = os.time()
 local lastRaised = 0
-local donorHistory = {}
+local hopTimer = CONFIG.Countdown
 local httpRequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
 local executor = (identifyexecutor and identifyexecutor()) or "Unknown"
 
---// INITIALIZE STATS
--- Added a more robust check to prevent the script from hanging at the start
-local leaderstats = player:WaitForChild("leaderstats", 20)
-local raisedStat = leaderstats and leaderstats:WaitForChild("Raised", 20)
+--// UI SYSTEM (PREMIUM MENU)
+local sg = Instance.new("ScreenGui", player.PlayerGui)
+sg.Name = "GeminiMenu"
 
-if raisedStat then
-    lastRaised = raisedStat.Value
-else
-    warn("Leaderstats 'Raised' not found. Stat tracking may be disabled.")
+local main = Instance.new("Frame", sg)
+main.Size = UDim2.new(0, 220, 0, 130)
+main.Position = UDim2.new(1, -230, 1, -150)
+main.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+main.BorderSizePixel = 0
+
+local corner = Instance.new("UICorner", main)
+corner.CornerRadius = UDim.new(0, 8)
+
+local stroke = Instance.new("UIStroke", main)
+stroke.Color = Color3.fromRGB(0, 170, 255)
+stroke.Thickness = 2
+
+local title = Instance.new("TextLabel", main)
+title.Size = UDim2.new(1, 0, 0, 30)
+title.BackgroundTransparency = 1
+title.Text = "💎 GEMINI PRO V3"
+title.TextColor3 = Color3.fromRGB(0, 170, 255)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 16
+
+local function createLabel(text, pos)
+    local l = Instance.new("TextLabel", main)
+    l.Size = UDim2.new(1, -20, 0, 20)
+    l.Position = pos
+    l.BackgroundTransparency = 1
+    l.Text = text
+    l.TextColor3 = Color3.new(1, 1, 1)
+    l.Font = Enum.Font.GothamMedium
+    l.TextSize = 14
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    return l
 end
 
---// UTILITY FUNCTIONS
-local function getThumbnail()
-    return "https://www.roblox.com/headshot-thumbnail/image?userId=" .. player.UserId .. "&width=420&height=420&format=png"
-end
-
--- Improved server hopping for RoFundMe
-local function serverHop()
-    local success, err = pcall(function()
-        TeleportService:Teleport(CONFIG.PlaceID, player)
-    end)
-    if not success then warn("Teleport Error: " .. tostring(err)) end
-end
-
-local function getGoalString()
-    local str = ""
-    local g = player:FindFirstChild("Goals")
-    if g then
-        for i = 1, 3 do
-            local folder = g:FindFirstChild("Goal"..i)
-            if folder and folder:FindFirstChild("Goal"..i.."Exist") and folder["Goal"..i.."Exist"].Value then
-                str = str .. string.format("🎯 **%s**: `%d/%d`\n", 
-                    tostring(folder["Goal"..i.."Name"].Value), 
-                    tonumber(folder["Goal"..i.."Raised"].Value) or 0, 
-                    tonumber(folder["Goal"..i.."Max"].Value) or 0)
-            end
-        end
-    end
-    return (str ~= "") and str or "No active goals found."
-end
+local statusLabel = createLabel("Status: Initializing...", UDim2.new(0, 10, 0, 40))
+local raisedLabel = createLabel("Session Raised: 0", UDim2.new(0, 10, 0, 60))
+local uptimeLabel = createLabel("Uptime: 00:00", UDim2.new(0, 10, 0, 80))
+local timerLabel = createLabel("Next Hop: 15:00", UDim2.new(0, 10, 0, 100))
 
 --// WEBHOOK DISPATCHER
 local function sendRichWebhook(type, color, details)
-    if not httpRequest or CONFIG.Webhook == "YOUR_WEBHOOK_HERE" then return end
+    if not httpRequest or CONFIG.Webhook == "YOUR_WEBHOOK_HERE" or CONFIG.Webhook == "" then return end
     
     local uptime = os.time() - startTime
     local h, m = math.floor(uptime/3600), math.floor((uptime%3600)/60)
     
-    local embed = {
-        ["title"] = "💎 Gemini Pro | " .. type,
-        ["color"] = color,
-        ["thumbnail"] = {["url"] = getThumbnail()},
-        ["fields"] = {
-            {["name"] = "👤 Player", ["value"] = "`" .. player.Name .. "`", ["inline"] = true},
-            {["name"] = "📊 Session", ["value"] = "Gained: **" .. sessionRaised .. "**", ["inline"] = true},
-            {["name"] = "🎯 Goals", ["value"] = getGoalString(), ["inline"] = false}
-        },
-        ["footer"] = {["text"] = "Executor: " .. executor .. " | ID: " .. tostring(CONFIG.PlaceID)},
-        ["timestamp"] = DateTime.now():ToIsoDate()
+    local payload = {
+        ["embeds"] = {{ -- Wrapped in array for Discord fix
+            ["title"] = "💎 Gemini Pro | " .. type,
+            ["color"] = color,
+            ["fields"] = {
+                {["name"] = "👤 Player", ["value"] = "`" .. player.Name .. "`", ["inline"] = true},
+                {["name"] = "📊 Session", ["value"] = "Raised: **" .. sessionRaised .. "**", ["inline"] = true},
+                {["name"] = "⏱️ Uptime", ["value"] = string.format("`%dh %dm`", h, m), ["inline"] = true}
+            },
+            ["footer"] = {["text"] = "Executor: " .. executor},
+            ["timestamp"] = DateTime.now():ToIsoDate()
+        }}
     }
     
-    if details then table.insert(embed.fields, {["name"] = "ℹ️ Details", ["value"] = details, ["inline"] = false}) end
+    if details then table.insert(payload.embeds[1].fields, {["name"] = "ℹ️ Details", ["value"] = details, ["inline"] = false}) end
 
     pcall(function()
         httpRequest({
             Url = CONFIG.Webhook,
             Method = "POST",
             Headers = {["Content-Type"] = "application/json"},
-            Body = HttpService:JSONEncode({embeds = {embed}})
+            Body = HttpService:JSONEncode(payload)
         })
     end)
 end
 
---// CORE LOGIC
-local function setupEnvironment()
-    if CONFIG.LowGraphics then
-        pcall(function()
-            Lighting.GlobalShadows = false
-            for _, v in pairs(game:GetDescendants()) do
-                if v:IsA("Part") or v:IsA("MeshPart") then 
-                    v.Material = Enum.Material.SmoothPlastic 
-                end
-            end
-        end)
-    end
+--// UTILITIES
+local function serverHop()
+    statusLabel.Text = "Status: Server Hopping..."
+    sendRichWebhook("Server Hopping", 15105570, "Reason: Limit reached or no booths.")
+    task.wait(1)
+    TeleportService:Teleport(CONFIG.PlaceID, player)
 end
 
 local function say(msg)
@@ -133,8 +130,9 @@ local function say(msg)
     end
 end
 
+--// CLAIM LOGIC
 local function claimAndPark()
-    -- Some games use "Booths" instead of "Stands"
+    statusLabel.Text = "Status: Finding Booth..."
     local stands = workspace:FindFirstChild("Stands") or workspace:FindFirstChild("Booths")
     if not stands then return false end
 
@@ -146,15 +144,17 @@ local function claimAndPark()
             
             if prompt and player.Character then
                 local hrp = player.Character:WaitForChild("HumanoidRootPart")
-                hrp.CFrame = pPart.CFrame
+                hrp.CFrame = pPart.CFrame -- Moved directly to the prompt
                 task.wait(0.5)
                 fireproximityprompt(prompt)
                 task.wait(2)
 
                 if claimed.Value == player.Name or claimed.Value == player.DisplayName then
-                    hrp.CFrame = pPart.CFrame * CFrame.new(0, 0, 3) * CFrame.Angles(0, math.pi, 0)
+                    -- Position slightly back from the prompt but facing the same way
+                    hrp.CFrame = pPart.CFrame * CFrame.new(0, 0, 2.5) 
                     say("/e dance2")
-                    sendRichWebhook("Booth Claimed", 3066993)
+                    statusLabel.Text = "Status: Secured & Dancing"
+                    sendRichWebhook("Booth Secured", 3066993)
                     return true
                 end
             end
@@ -163,35 +163,46 @@ local function claimAndPark()
     return false
 end
 
---// EXECUTION
-setupEnvironment()
+--// MAIN EXECUTION
+if CONFIG.LowGraphics then
+    Lighting.GlobalShadows = false
+    for _, v in pairs(game:GetDescendants()) do
+        if v:IsA("Part") or v:IsA("MeshPart") then v.Material = Enum.Material.SmoothPlastic end
+    end
+end
+
+sendRichWebhook("Script Initialized", 16777215)
+
 task.spawn(function()
-    task.wait(3)
-    
+    repeat task.wait() until player:FindFirstChild("leaderstats")
+    local raisedStat = player.leaderstats:WaitForChild("Raised")
+    lastRaised = raisedStat.Value
+
     if claimAndPark() then
-        local timer = 0
         while true do
             task.wait(1)
-            timer = timer + 1
+            hopTimer = hopTimer - 1
+            
+            -- Update UI
+            local uptime = os.time() - startTime
+            uptimeLabel.Text = string.format("Uptime: %02d:%02d", math.floor(uptime/60), uptime%60)
+            timerLabel.Text = string.format("Next Hop: %02d:%02d", math.floor(hopTimer/60), hopTimer%60)
+            raisedLabel.Text = "Session Raised: " .. sessionRaised
             
             -- Donation Detection
-            if raisedStat then
-                local current = raisedStat.Value
-                if current > lastRaised then
-                    local gained = current - lastRaised
-                    sessionRaised = sessionRaised + gained
-                    
-                    say(string.format(CONFIG.Messages[math.random(1, #CONFIG.Messages)], gained))
-                    sendRichWebhook("Donation Received", 16776960, "Amount: **" .. gained .. "**")
-                    
-                    lastRaised = current
-                    timer = 0
-                    task.wait(1)
-                    say("/e dance2")
-                end
+            if raisedStat.Value > lastRaised then
+                local gained = raisedStat.Value - lastRaised
+                sessionRaised = sessionRaised + gained
+                lastRaised = raisedStat.Value
+                hopTimer = CONFIG.Countdown -- Reset hop timer on donation
+                
+                say(string.format(CONFIG.Messages[math.random(1, #CONFIG.Messages)], gained))
+                sendRichWebhook("Donation Received", 16776960, "Gained: **" .. gained .. "**")
+                task.wait(1)
+                say("/e dance2")
             end
             
-            if timer >= CONFIG.Countdown then
+            if hopTimer <= 0 then
                 serverHop()
                 break
             end
@@ -200,14 +211,6 @@ task.spawn(function()
         serverHop()
     end
 end)
-
---// PERSISTENCE
-if CONFIG.RejoinEnabled then
-    game:GetService("GuiService").ErrorMessageChanged:Connect(function()
-        task.wait(5)
-        serverHop()
-    end)
-end
 
 -- Anti-AFK
 player.Idled:Connect(function()
