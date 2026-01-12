@@ -1,8 +1,8 @@
 --[[
-    💎 GEMFUND ULTRA V1.1 [PROXIMITY & TIMER UPDATE]
-    - Fix: Added HoldDuration support for ProximityPrompts.
-    - Change: Server hop timer reduced to 10 minutes (600s).
-    - Fix: Improved prompt detection logic.
+    💎 GEMFUND ULTRA V1.1 [STABLE ROLLBACK]
+    - Fix: Integrated VirtualInputManager for 1s HoldDuration.
+    - Fix: Added a 5-stud Auto-Proximity scanning loop.
+    - Change: Server hop timer set to 600s (10 Minutes).
 ]]
 
 --// CONFIGURATION
@@ -25,7 +25,7 @@ local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local TextChatService = game:GetService("TextChatService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local VirtualInputManager = game:GetService("VirtualInputManager") -- For precise prompt holding
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
@@ -35,9 +35,46 @@ local hopTimer = CONFIG.Countdown
 local lastRaisedValue = 0
 local httpRequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
 
---// WEBHOOK & DATA (Simplified for speed)
+--// PROXIMITY SYSTEM
+local function holdPrompt(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then return end
+    
+    -- Simulate a 1.2 second hold for a 1 second duration prompt
+    local keyCode = prompt.KeyboardKeyCode
+    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+    task.wait(prompt.HoldDuration + 0.1)
+    VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+end
+
+--// DATA SCRAPER
+local function getUltraData()
+    local data = {Goals = {}, BoothText = "No Text Set"}
+    local goalsFolder = player:FindFirstChild("Goals")
+    if goalsFolder then
+        data.BoothText = goalsFolder:FindFirstChild("BoothText") and goalsFolder.BoothText.Value or data.BoothText
+        for i = 1, 3 do
+            local g = goalsFolder:FindFirstChild("Goal"..i)
+            if g and g:FindFirstChild("Goal"..i.."Exist") and g["Goal"..i.."Exist"].Value then
+                table.insert(data.Goals, {
+                    name = g["Goal"..i.."Name"].Value or "Goal "..i,
+                    current = g["Goal"..i.."Raised"].Value or 0,
+                    max = g["Goal"..i.."Max"].Value or 0
+                })
+            end
+        end
+    end
+    return data
+end
+
+--// WEBHOOK
 local function sendUltraWebhook(title, color)
     if not httpRequest then return end
+    local stats = getUltraData()
+    local fields = {
+        {["name"] = "👤 Player", ["value"] = player.Name, ["inline"] = true},
+        {["name"] = "📈 Session", ["value"] = sessionRaised .. " R$", ["inline"] = true},
+        {["name"] = "📝 Booth", ["value"] = "```" .. stats.BoothText .. "```", ["inline"] = false}
+    }
     pcall(function()
         httpRequest({
             Url = CONFIG.Webhook,
@@ -47,10 +84,7 @@ local function sendUltraWebhook(title, color)
                 ["embeds"] = {{
                     ["title"] = "💎 GemFund Ultra | " .. title,
                     ["color"] = color,
-                    ["fields"] = {
-                        {["name"] = "👤 Player", ["value"] = player.Name, ["inline"] = true},
-                        {["name"] = "📈 Session", ["value"] = sessionRaised .. " R$", ["inline"] = true}
-                    },
+                    ["fields"] = fields,
                     ["footer"] = {["text"] = "JobId: " .. game.JobId},
                     ["timestamp"] = DateTime.now():ToIsoDate()
                 }}
@@ -61,9 +95,9 @@ end
 
 --// UI SETUP
 local sg = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
-sg.Name = "GemFundUltraUI"; sg.ResetOnSpawn = false
+sg.Name = "GemFundUI"; sg.ResetOnSpawn = false
 local frame = Instance.new("Frame", sg)
-frame.Size = UDim2.new(0, 240, 0, 110); frame.Position = UDim2.new(1, -250, 1, -120); frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20); frame.BorderSizePixel = 0
+frame.Size = UDim2.new(0, 240, 0, 110); frame.Position = UDim2.new(1, -250, 1, -120); frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
 Instance.new("UICorner", frame)
 local stroke = Instance.new("UIStroke", frame); stroke.Color = Color3.fromRGB(0, 200, 255); stroke.Thickness = 2
 
@@ -86,22 +120,23 @@ task.spawn(function()
     end
 end)
 
---// SMART PROXIMITY HOLDER
-local function interactWithPrompt(prompt)
-    if not prompt then return end
-    statusLbl.Text = "Status: Holding Prompt..."
-    
-    -- Method 1: Key Sim (Most reliable for HoldDuration)
-    local keyCode = prompt.KeyboardKeyCode
-    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
-    task.wait(prompt.HoldDuration + 0.2)
-    VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
-    
-    -- Method 2: Internal Logic (Fallback)
-    fireproximityprompt(prompt)
-end
+--// AUTO-PROXIMITY SCANNER (5 STUDS)
+task.spawn(function()
+    while task.wait(1) do
+        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            for _, v in pairs(workspace:GetDescendants()) do
+                if v:IsA("ProximityPrompt") then
+                    local dist = (player.Character.HumanoidRootPart.Position - v.Parent.Position).Magnitude
+                    if dist <= 5 then
+                        holdPrompt(v)
+                    end
+                end
+            end
+        end
+    end
+end)
 
---// BOOTH LOGIC
+--// SMART BOOTH FINDER
 local function getBestBooth()
     local stands = workspace:FindFirstChild("Stands") or workspace:FindFirstChild("Booths")
     if not stands then return nil end
@@ -113,7 +148,7 @@ local function getBestBooth()
             local density = 0
             for _, p in pairs(Players:GetPlayers()) do
                 if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-                    if (p.Character.HumanoidRootPart.Position - pPart.Position).Magnitude < 40 then density = density + 1 end
+                    if (p.Character.HumanoidRootPart.Position - pPart.Position).Magnitude < 45 then density = density + 1 end
                 end
             end
             if density > maxDensity then maxDensity = density; best = booth end
@@ -122,43 +157,22 @@ local function getBestBooth()
     return best
 end
 
-local function claim()
-    local booth = getBestBooth()
-    if not booth then return false end
-
-    local pPart = booth:FindFirstChild("ProxPart", true) or booth.PrimaryPart
-    local prompt = booth:FindFirstChildOfClass("ProximityPrompt", true)
-    local hrp = player.Character:WaitForChild("HumanoidRootPart")
-
-    hrp.CFrame = pPart.CFrame
-    task.wait(0.5)
-
-    for i = 1, 2 do
-        statusLbl.Text = "Status: Claiming Attempt " .. i
-        interactWithPrompt(prompt)
-        task.wait(2.5)
-
-        local owner = booth:FindFirstChild("ClaimedName")
-        if owner and (owner.Value == player.Name or owner.Value == player.DisplayName) then
-            hrp.CFrame = pPart.CFrame * CFrame.new(0, 0, 3)
-            statusLbl.Text = "Status: Secured & Dancing"
-            TextChatService.TextChannels.RBXGeneral:SendAsync("/e dance2")
-            return true
-        end
-    end
-    return false
-end
-
 --// MAIN
 task.spawn(function()
     local ls = player:WaitForChild("leaderstats", 30)
     local raised = ls:WaitForChild("Raised")
     lastRaisedValue = raised.Value
     
-    sendUltraWebhook("Script Initialized", 16777215)
+    sendUltraWebhook("Script Started", 16777215)
     
-    if claim() then
-        sendUltraWebhook("Booth Secured", 3066993)
+    statusLbl.Text = "Status: Claiming Booth..."
+    local booth = getBestBooth()
+    if booth then
+        local pPart = booth:FindFirstChild("ProxPart", true) or booth.PrimaryPart
+        player.Character.HumanoidRootPart.CFrame = pPart.CFrame
+        task.wait(0.5)
+        
+        -- Success Watcher
         raised.Changed:Connect(function(val)
             local gained = val - lastRaisedValue
             if gained > 0 then
@@ -170,8 +184,10 @@ task.spawn(function()
                 sendUltraWebhook("Donation Received!", 16776960)
             end
         end)
+        
+        statusLbl.Text = "Status: Active"
     else
-        statusLbl.Text = "Status: No Booths Found. Hopping..."
+        statusLbl.Text = "Status: No Booths. Hopping..."
         task.wait(2)
         TeleportService:Teleport(CONFIG.PlaceID, player)
     end
