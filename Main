@@ -1,0 +1,235 @@
+--// CONFIG
+local PLACE_ID = 137532437639931
+local COUNTDOWN_TIME = 900 -- 15 minutes
+local ANTI_AFK_INTERVAL = 300
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1460256968332804291/h4SXIYVAhKsNgfnVJIgC5NPZd2VZ2b1w_xHXEBEl9jEYzXOivretwzaWzp5Rfbfq8Su2"
+
+--// SERVICES
+local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local VirtualUser = game:GetService("VirtualUser")
+
+local player = Players.LocalPlayer
+
+--// HTTP REQUEST WRAPPER
+local httpRequest =
+    request or http_request or (syn and syn.request)
+
+--// PLACE CHECK
+if game.PlaceId ~= PLACE_ID then
+    warn("Wrong place.")
+    return
+end
+
+--// WEBHOOK FUNCTION
+local function sendWebhook(title, description)
+    if not httpRequest then return end
+
+    local data = {
+        embeds = {{
+            title = title,
+            description = description,
+            color = 65280,
+            footer = {
+                text = "Auto Booth Script"
+            },
+            timestamp = DateTime.now():ToIsoDate()
+        }}
+    }
+
+    pcall(function()
+        httpRequest({
+            Url = WEBHOOK_URL,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode(data)
+        })
+    end)
+end
+
+sendWebhook(
+    "Script Started",
+    "**User:** "..player.Name.."\n**UserId:** "..player.UserId
+)
+
+--// LEADERSTATS
+local leaderstats = player:WaitForChild("leaderstats", 10)
+if not leaderstats then return end
+
+local Raised = leaderstats:FindFirstChild("Raised")
+local Donated = leaderstats:FindFirstChild("Donated")
+if not Raised or not Donated then return end
+
+--// UI
+local gui = Instance.new("ScreenGui", game.CoreGui)
+gui.Name = "AutoBoothGUI"
+gui.ResetOnSpawn = false
+
+local main = Instance.new("Frame", gui)
+main.Size = UDim2.fromScale(0.32, 0.38)
+main.Position = UDim2.fromScale(0.34, 0.3)
+main.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 14)
+
+local title = Instance.new("TextLabel", main)
+title.Size = UDim2.fromScale(1, 0.18)
+title.BackgroundTransparency = 1
+title.Text = "Welcome, "..player.Name
+title.TextColor3 = Color3.new(1,1,1)
+title.Font = Enum.Font.GothamBold
+title.TextScaled = true
+
+local avatar = Instance.new("ImageLabel", main)
+avatar.Size = UDim2.fromScale(0.18, 0.28)
+avatar.Position = UDim2.fromScale(0.04, 0.22)
+avatar.BackgroundTransparency = 1
+avatar.Image = Players:GetUserThumbnailAsync(
+    player.UserId,
+    Enum.ThumbnailType.HeadShot,
+    Enum.ThumbnailSize.Size420x420
+)
+
+local close = Instance.new("TextButton", main)
+close.Size = UDim2.fromScale(0.1, 0.12)
+close.Position = UDim2.fromScale(0.88, 0.02)
+close.Text = "X"
+close.Font = Enum.Font.GothamBold
+close.TextScaled = true
+close.BackgroundColor3 = Color3.fromRGB(170, 60, 60)
+close.TextColor3 = Color3.new(1,1,1)
+Instance.new("UICorner", close)
+
+close.MouseButton1Click:Connect(function()
+    gui:Destroy()
+end)
+
+local toggles = Instance.new("Frame", main)
+toggles.Size = UDim2.fromScale(0.7, 0.55)
+toggles.Position = UDim2.fromScale(0.26, 0.28)
+toggles.BackgroundTransparency = 1
+
+local function createToggle(text, order)
+    local btn = Instance.new("TextButton", toggles)
+    btn.Size = UDim2.fromScale(1, 0.22)
+    btn.Position = UDim2.fromScale(0, (order-1)*0.26)
+    btn.Text = text..": ON"
+    btn.Font = Enum.Font.Gotham
+    btn.TextScaled = true
+    btn.BackgroundColor3 = Color3.fromRGB(60,180,120)
+    btn.TextColor3 = Color3.new(1,1,1)
+    Instance.new("UICorner", btn)
+
+    local state = true
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        btn.Text = text..": "..(state and "ON" or "OFF")
+        btn.BackgroundColor3 = state and Color3.fromRGB(60,180,120)
+            or Color3.fromRGB(180,60,60)
+    end)
+
+    return function() return state end
+end
+
+local autoClaim = createToggle("Auto Claim Booth", 1)
+local autoHop = createToggle("Server Hop", 2)
+local antiAFKToggle = createToggle("Anti-AFK", 3)
+
+--// BOOTH FIND
+local function findUnclaimedBooth()
+    local stands = workspace:WaitForChild("Stands", 10)
+    if not stands then return end
+
+    for _, booth in ipairs(stands:GetChildren()) do
+        local claimed = booth:FindFirstChild("ClaimedName")
+        if claimed and claimed:IsA("StringValue") and claimed.Value == "" then
+            return booth
+        end
+    end
+end
+
+local function claimBooth(booth)
+    local hrp = player.Character:WaitForChild("HumanoidRootPart")
+    hrp.CFrame = booth.PrimaryPart.CFrame + Vector3.new(0, 3, 0)
+    task.wait(1)
+
+    local prompt = booth:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt then
+        fireproximityprompt(prompt)
+        sendWebhook(
+            "Booth Claimed",
+            "**User:** "..player.Name.."\n**Booth:** "..booth.Name
+        )
+    end
+end
+
+local function teleportToTop(booth)
+    local hrp = player.Character:WaitForChild("HumanoidRootPart")
+    local galaxy = booth:FindFirstChild("GalaxyBooth")
+    if galaxy then
+        local part = galaxy:FindFirstChild("BootomPartFix")
+        if part then
+            hrp.CFrame = part.CFrame + Vector3.new(0, 4, 0)
+        end
+    end
+end
+
+--// SERVER HOP
+local function serverHop()
+    sendWebhook(
+        "Server Hop",
+        "**User:** "..player.Name.."\nNo donations received in 15 minutes."
+    )
+    TeleportService:Teleport(game.PlaceId, player)
+end
+
+--// MAIN LOGIC
+task.spawn(function()
+    task.wait(2)
+
+    local booth = findUnclaimedBooth()
+    if booth and autoClaim() then
+        claimBooth(booth)
+        task.wait(2)
+        teleportToTop(booth)
+    end
+
+    local lastRaised = Raised.Value
+
+    while true do
+        local timer = COUNTDOWN_TIME
+        while timer > 0 do
+            task.wait(1)
+            timer -= 1
+
+            if Raised.Value > lastRaised then
+                sendWebhook(
+                    "Donation Received",
+                    "**User:** "..player.Name..
+                    "\n**Raised Increased:** "..(Raised.Value - lastRaised)
+                )
+                lastRaised = Raised.Value
+                break
+            end
+        end
+
+        if Raised.Value == lastRaised and autoHop() then
+            serverHop()
+            break
+        end
+    end
+end)
+
+--// ANTI AFK
+task.spawn(function()
+    while true do
+        task.wait(ANTI_AFK_INTERVAL)
+        if antiAFKToggle() then
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end
+    end
+end)
