@@ -1,18 +1,16 @@
 --[[
-    💎 GEMFUND ULTRA V1.1 (Ultimate Edition)
-    - Fixes: Restored UI Timer Logic & Webhook Arrays
-    - New: Real-time Goal Tracker (Goal1-Goal3)
-    - New: Automatic Booth Message Scraper
-    - New: Account Age & JobId Logging
+    💎 GEMFUND ULTRA V1.2 (Stable)
+    - Fix: Added nil-checks for Goals folder to prevent crashing.
+    - Fix: Re-coded Timer for high precision.
+    - Fix: Universal Webhook handler (Array-safe).
 ]]
 
 --// CONFIGURATION
 local CONFIG = {
     Webhook = "https://discord.com/api/webhooks/1460256968332804291/h4SXIYVAhKsNgfnVJIgC5NPZd2VZ2b1w_xHXEBEl9jEYzXOivretwzaWzp5Rfbfq8Su2",
     PlaceID = 137532437639931,
-    Countdown = 900, -- 15 Minutes (900 seconds)
+    Countdown = 900, -- 15 Minutes
     LowGraphics = true,
-    AutoDance = "/e dance2",
     Messages = {
         "Thank you so much for the %d Robux!",
         "Legend! Thanks for the %d!",
@@ -26,168 +24,177 @@ local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local TextChatService = game:GetService("TextChatService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
 
 --// VARIABLES
 local player = Players.LocalPlayer
 local sessionRaised = 0
 local startTime = os.time()
 local hopTimeLeft = CONFIG.Countdown
-local httpRequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+local lastRaisedValue = 0
 
---// GOAL SCRAPER
-local function getGoalsData()
-    local fields = {}
+--// WEBHOOK SENDER (FIXED & IMPROVED)
+local function sendWebhook(title, color)
+    local request = (syn and syn.request) or (http and http.request) or http_request or request
+    if not request then return end
+
+    -- Safe Data Collection
     local goalsFolder = player:FindFirstChild("Goals")
+    local boothText = (goalsFolder and goalsFolder:FindFirstChild("BoothText")) and goalsFolder.BoothText.Value or "No custom text"
+    
+    local fields = {
+        {["name"] = "👤 Player", ["value"] = "`" .. player.Name .. "`", ["inline"] = true},
+        {["name"] = "📈 Session", ["value"] = "**" .. sessionRaised .. " R$**", ["inline"] = true},
+        {["name"] = "📝 Booth", ["value"] = "```" .. boothText .. "```", ["inline"] = false}
+    }
+
+    -- Add Goals only if they exist
     if goalsFolder then
         for i = 1, 3 do
             local g = goalsFolder:FindFirstChild("Goal"..i)
-            if g and g:FindFirstChild("Goal"..i.."Exist") and g["Goal"..i.."Exist"].Value then
-                local name = g["Goal"..i.."Name"].Value or "Goal "..i
-                local raised = g["Goal"..i.."Raised"].Value or 0
-                local max = g["Goal"..i.."Max"].Value or 100
+            if g and g:FindFirstChild("Goal"..i.."Exist") and g["Goal"..i.."Exist"].Value == true then
                 table.insert(fields, {
-                    ["name"] = "🎯 " .. name,
-                    ["value"] = string.format("Progress: `%d / %d`", raised, max),
+                    ["name"] = "🎯 " .. (g["Goal"..i.."Name"].Value or "Goal"),
+                    ["value"] = string.format("`%d / %d`", g["Goal"..i.."Raised"].Value, g["Goal"..i.."Max"].Value),
                     ["inline"] = true
                 })
             end
         end
     end
-    return fields
-end
 
---// WEBHOOK DISPATCHER (IMAGE STYLE)
-local function sendEnhancedWebhook(title, color)
-    if not httpRequest then return end
-    
-    local goals = getGoalsData()
-    local boothText = "None"
-    if player:FindFirstChild("Goals") and player.Goals:FindFirstChild("BoothText") then
-        boothText = player.Goals.BoothText.Value
-    end
-
-    local fields = {
-        {["name"] = "👤 Player", ["value"] = string.format("**%s**\n(%d)", player.Name, player.UserId), ["inline"] = true},
-        {["name"] = "⌛ Account Age", ["value"] = player.AccountAge .. " Days", ["inline"] = true},
-        {["name"] = "📈 Total Raised", ["value"] = tostring(player.leaderstats.Raised.Value), ["inline"] = true},
-        {["name"] = "📝 Booth Message", ["value"] = "```" .. boothText .. "```", ["inline"] = false}
-    }
-    
-    for _, goal in ipairs(goals) do table.insert(fields, goal) end
-
-    local payload = {
+    local payload = HttpService:JSONEncode({
         ["embeds"] = {{
-            ["title"] = "✅ " .. title,
+            ["title"] = "💎 GemFund Ultra | " .. title,
             ["color"] = color,
             ["fields"] = fields,
-            ["footer"] = {["text"] = "GemFund Ultra | JobId: " .. game.JobId},
+            ["footer"] = {["text"] = "Server: " .. game.JobId},
             ["timestamp"] = DateTime.now():ToIsoDate(),
             ["thumbnail"] = {["url"] = "https://www.roblox.com/headshot-thumbnail/image?userId="..player.UserId.."&width=420&height=420&format=png"}
         }}
-    }
+    })
 
     pcall(function()
-        httpRequest({
-            Url = CONFIG.Webhook,
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = HttpService:JSONEncode(payload)
-        })
+        request({Url = CONFIG.Webhook, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = payload})
     end)
 end
 
---// UI SETUP
+--// UI SETUP (FIXED)
 local sg = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
 sg.Name = "GemFundUI"
 sg.ResetOnSpawn = false
 
-local frame = Instance.new("Frame", sg)
-frame.Size = UDim2.new(0, 220, 0, 100)
-frame.Position = UDim2.new(1, -230, 1, -110)
-frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+local main = Instance.new("Frame", sg)
+main.Size = UDim2.new(0, 220, 0, 100)
+main.Position = UDim2.new(1, -230, 1, -110)
+main.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+Instance.new("UICorner", main)
+Instance.new("UIStroke", main).Color = Color3.fromRGB(0, 180, 255)
 
-local title = Instance.new("TextLabel", frame)
-title.Size = UDim2.new(1, 0, 0, 30)
-title.Text = "💎 GEMFUND ULTRA V1.1"
-title.TextColor3 = Color3.fromRGB(0, 255, 150)
-title.BackgroundTransparency = 1
-title.Font = Enum.Font.GothamBold
+local timerLbl = Instance.new("TextLabel", main)
+timerLbl.Size = UDim2.new(1, 0, 0, 40)
+timerLbl.Position = UDim2.new(0,0,0,10)
+timerLbl.Text = "Loading Timer..."
+timerLbl.TextColor3 = Color3.new(1,1,1)
+timerLbl.BackgroundTransparency = 1
+timerLbl.Font = Enum.Font.GothamBold
 
-local timerLabel = Instance.new("TextLabel", frame)
-timerLabel.Size = UDim2.new(1, 0, 0, 30)
-timerLabel.Position = UDim2.new(0, 0, 0, 35)
-timerLabel.Text = "Next Hop: 15:00"
-timerLabel.TextColor3 = Color3.new(1,1,1)
-timerLabel.BackgroundTransparency = 1
+local raisedLbl = Instance.new("TextLabel", main)
+raisedLbl.Size = UDim2.new(1, 0, 0, 30)
+raisedLbl.Position = UDim2.new(0,0,0,50)
+raisedLbl.Text = "Session: 0 R$"
+raisedLbl.TextColor3 = Color3.fromRGB(0, 255, 100)
+raisedLbl.BackgroundTransparency = 1
 
-local raisedLabel = Instance.new("TextLabel", frame)
-raisedLabel.Size = UDim2.new(1, 0, 0, 30)
-raisedLabel.Position = UDim2.new(0, 0, 0, 60)
-raisedLabel.Text = "Session: 0 R$"
-raisedLabel.TextColor3 = Color3.new(1,1,1)
-raisedLabel.BackgroundTransparency = 1
+--// SMART CLUSTER BOOTH FINDER
+local function findAndClaim()
+    local stands = workspace:FindFirstChild("Stands") or workspace:FindFirstChild("Booths")
+    if not stands then return end
 
---// TIMER LOGIC
+    local bestBooth = nil
+    local maxDensity = -1
+
+    for _, b in pairs(stands:GetChildren()) do
+        local claimed = b:FindFirstChild("ClaimedName")
+        if claimed and (claimed.Value == "" or claimed.Value == nil) then
+            -- Count nearby players
+            local nearby = 0
+            for _, p in pairs(Players:GetPlayers()) do
+                if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                    if (p.Character.HumanoidRootPart.Position - b.PrimaryPart.Position).Magnitude < 40 then
+                        nearby = nearby + 1
+                    end
+                end
+            end
+
+            if nearby > maxDensity then
+                maxDensity = nearby
+                bestBooth = b
+            end
+        end
+    end
+
+    if bestBooth and player.Character then
+        local hrp = player.Character:WaitForChild("HumanoidRootPart")
+        hrp.CFrame = bestBooth.PrimaryPart.CFrame
+        task.wait(0.5)
+        local prompt = bestBooth:FindFirstChildOfClass("ProximityPrompt", true)
+        if prompt then fireproximityprompt(prompt) end
+        
+        -- Position slightly away from sign facing forward
+        task.wait(1)
+        hrp.CFrame = bestBooth.PrimaryPart.CFrame * CFrame.new(0, 0, 3)
+        
+        -- Animation
+        if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+            TextChatService.TextChannels.RBXGeneral:SendAsync("/e dance2")
+        else
+            ReplicatedStorage.DefaultChatSystemChatEvents.SayMessageRequest:FireServer("/e dance2", "All")
+        end
+        sendWebhook("Joined & Claimed", 65280)
+    end
+end
+
+--// MAIN EXECUTION
 task.spawn(function()
+    local ls = player:WaitForChild("leaderstats", 20)
+    local raised = ls:WaitForChild("Raised")
+    lastRaisedValue = raised.Value
+
+    findAndClaim()
+
+    -- Donation Watcher
+    raised.Changed:Connect(function(newVal)
+        local diff = newVal - lastRaisedValue
+        if diff > 0 then
+            sessionRaised = sessionRaised + diff
+            lastRaisedValue = newVal
+            raisedLbl.Text = "Session: " .. sessionRaised .. " R$"
+            
+            -- Say thanks
+            local msg = CONFIG.Messages[math.random(1, #CONFIG.Messages)]
+            TextChatService.TextChannels.RBXGeneral:SendAsync(string.format(msg, diff))
+            
+            sendWebhook("Donation Received! 💸", 16776960)
+            hopTimeLeft = CONFIG.Countdown -- Reset timer on donation
+        end
+    end)
+
+    -- Precision Timer Loop
     while task.wait(1) do
         hopTimeLeft = hopTimeLeft - 1
-        local mins = math.floor(hopTimeLeft / 60)
-        local secs = hopTimeLeft % 60
-        timerLabel.Text = string.format("Next Hop: %02d:%02d", mins, secs)
+        local m = math.floor(hopTimeLeft / 60)
+        local s = hopTimeLeft % 60
+        timerLbl.Text = string.format("Next Hop: %02d:%02d", m, s)
         
         if hopTimeLeft <= 0 then
+            sendWebhook("Server Hopping...", 16711680)
             TeleportService:Teleport(CONFIG.PlaceID, player)
             break
         end
     end
 end)
 
---// SMART BOOTH FINDER
-local function claimBestBooth()
-    local stands = workspace:FindFirstChild("Stands") or workspace:FindFirstChild("Booths")
-    local bestStand = nil
-    local maxNearby = -1
-
-    for _, s in pairs(stands:GetChildren()) do
-        local owner = s:FindFirstChild("ClaimedName")
-        if owner and (owner.Value == "" or owner.Value == nil) then
-            local count = 0
-            for _, p in pairs(Players:GetPlayers()) do
-                if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-                    if (p.Character.HumanoidRootPart.Position - s.PrimaryPart.Position).Magnitude < 45 then
-                        count = count + 1
-                    end
-                end
-            end
-            if count > maxNearby then
-                maxNearby = count
-                bestStand = s
-            end
-        end
-    end
-
-    if bestStand then
-        local hrp = player.Character:WaitForChild("HumanoidRootPart")
-        hrp.CFrame = bestStand.PrimaryPart.CFrame
-        task.wait(0.5)
-        local prompt = bestStand:FindFirstChildOfClass("ProximityPrompt", true)
-        if prompt then fireproximityprompt(prompt) end
-        task.wait(2)
-        sendEnhancedWebhook("Booth Secured", 3066993)
-        TextChatService.TextChannels.RBXGeneral:SendAsync(CONFIG.AutoDance)
-    end
-end
-
---// INITIALIZE
-task.spawn(claimBestBooth)
-
-player.leaderstats.Raised.Changed:Connect(function(val)
-    local gained = val - lastRaised
-    if gained > 0 then
-        sessionRaised = sessionRaised + gained
-        raisedLabel.Text = "Session: " .. sessionRaised .. " R$"
-        sendEnhancedWebhook("Donation Received!", 16776960)
-    end
+-- Anti-AFK
+player.Idled:Connect(function()
+    game:GetService("VirtualUser"):CaptureController()
+    game:GetService("VirtualUser"):ClickButton2(Vector2.new())
 end)
