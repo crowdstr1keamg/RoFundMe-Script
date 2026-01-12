@@ -1,15 +1,15 @@
 --[[
-    💎 GEMINI PRO | AUTO-BOOTH SYSTEM
-    Version: 2.5 (Premium Build)
-    Features: Rich Webhooks, Donor Tracking, Low Graphics, Anti-AFK, Smart Claim
+    💎 GEMINI PRO | AUTO-BOOTH SYSTEM (RoFundMe)
+    Version: 2.7
+    Optimized for RoFundMe's specific folder structure and stats.
 ]]
 
 --// CONFIGURATION
 local CONFIG = {
-    Webhook = "https://discord.com/api/webhooks/1460256968332804291/h4SXIYVAhKsNgfnVJIgC5NPZd2VZ2b1w_xHXEBEl9jEYzXOivretwzaWzp5Rfbfq8Su2",
-    PlaceID = 137532437639931,
-    Countdown = 900, -- 15 Minutes
-    LowGraphics = true, -- Set to true to prevent crashing while AFK
+    Webhook = "https://discord.com/api/webhooks/1460256968332804291/h4SXIYVAhKsNgfnVJIgC5NPZd2VZ2b1w_xHXEBEl9jEYzXOivretwzaWzp5Rfbfq8Su2", 
+    PlaceID = 137532437639931, -- Your specific RoFundMe ID
+    Countdown = 900, -- 15 Minutes before server hop
+    LowGraphics = true,
     RejoinEnabled = true,
     Messages = {
         "Thank you so much for the %d Robux!",
@@ -35,15 +35,30 @@ local startTime = os.time()
 local lastRaised = 0
 local donorHistory = {}
 local httpRequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
-local executor = identifyexecutor and identifyexecutor() or "Unknown"
+local executor = (identifyexecutor and identifyexecutor()) or "Unknown"
 
 --// INITIALIZE STATS
-repeat task.wait() until player:FindFirstChild("leaderstats")
-lastRaised = player.leaderstats.Raised.Value
+-- Added a more robust check to prevent the script from hanging at the start
+local leaderstats = player:WaitForChild("leaderstats", 20)
+local raisedStat = leaderstats and leaderstats:WaitForChild("Raised", 20)
+
+if raisedStat then
+    lastRaised = raisedStat.Value
+else
+    warn("Leaderstats 'Raised' not found. Stat tracking may be disabled.")
+end
 
 --// UTILITY FUNCTIONS
 local function getThumbnail()
     return "https://www.roblox.com/headshot-thumbnail/image?userId=" .. player.UserId .. "&width=420&height=420&format=png"
+end
+
+-- Improved server hopping for RoFundMe
+local function serverHop()
+    local success, err = pcall(function()
+        TeleportService:Teleport(CONFIG.PlaceID, player)
+    end)
+    if not success then warn("Teleport Error: " .. tostring(err)) end
 end
 
 local function getGoalString()
@@ -53,50 +68,19 @@ local function getGoalString()
         for i = 1, 3 do
             local folder = g:FindFirstChild("Goal"..i)
             if folder and folder:FindFirstChild("Goal"..i.."Exist") and folder["Goal"..i.."Exist"].Value then
-                str = str .. string.format("🎯 **%s**: `%d/%d`\n", folder["Goal"..i.."Name"].Value, folder["Goal"..i.."Raised"].Value, folder["Goal"..i.."Max"].Value)
+                str = str .. string.format("🎯 **%s**: `%d/%d`\n", 
+                    tostring(folder["Goal"..i.."Name"].Value), 
+                    tonumber(folder["Goal"..i.."Raised"].Value) or 0, 
+                    tonumber(folder["Goal"..i.."Max"].Value) or 0)
             end
         end
     end
-    return str ~= "" and str or "No active goals."
-end
-
-local function logDonor(name, amount)
-    table.insert(donorHistory, 1, string.format("`%s` donated `%d`", name, amount))
-    if #donorHistory > 3 then table.remove(donorHistory, 4) end
-end
-
---// PREMIUM UI SYSTEM
-local function createNotify(text)
-    local sg = player.PlayerGui:FindFirstChild("GeminiUI") or Instance.new("ScreenGui", player.PlayerGui)
-    sg.Name = "GeminiUI"
-    
-    local frame = Instance.new("Frame", sg)
-    frame.Size = UDim2.new(0, 250, 0, 40)
-    frame.Position = UDim2.new(1, -260, 1, -100)
-    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-    frame.BorderSizePixel = 0
-    
-    local line = Instance.new("Frame", frame)
-    line.Size = UDim2.new(0, 4, 1, 0)
-    line.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
-    line.BorderSizePixel = 0
-    
-    local label = Instance.new("TextLabel", frame)
-    label.Size = UDim2.new(1, -10, 1, 0)
-    label.Position = UDim2.new(0, 10, 0, 0)
-    label.BackgroundTransparency = 1
-    label.Text = text
-    label.TextColor3 = Color3.new(1, 1, 1)
-    label.Font = Enum.Font.GothamMedium
-    label.TextSize = 14
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    
-    task.delay(5, function() frame:Destroy() end)
+    return (str ~= "") and str or "No active goals found."
 end
 
 --// WEBHOOK DISPATCHER
 local function sendRichWebhook(type, color, details)
-    if not httpRequest then return end
+    if not httpRequest or CONFIG.Webhook == "YOUR_WEBHOOK_HERE" then return end
     
     local uptime = os.time() - startTime
     local h, m = math.floor(uptime/3600), math.floor((uptime%3600)/60)
@@ -106,13 +90,11 @@ local function sendRichWebhook(type, color, details)
         ["color"] = color,
         ["thumbnail"] = {["url"] = getThumbnail()},
         ["fields"] = {
-            {["name"] = "👤 Session Owner", ["value"] = string.format("`%s` (%d)", player.Name, player.UserId), ["inline"] = true},
-            {["name"] = "📊 Session Stats", ["value"] = string.format("Gained: **%d**\nUptime: `%dh %dm`", sessionRaised, h, m), ["inline"] = true},
-            {["name"] = "📝 Booth Message", ["value"] = "```" .. (player.Goals:FindFirstChild("BoothText") and player.Goals.BoothText.Value or "N/A") .. "```", ["inline"] = false},
-            {["name"] = "🎯 Goals", ["value"] = getGoalString(), ["inline"] = true},
-            {["name"] = "📜 Recent Donors", ["value"] = #donorHistory > 0 and table.concat(donorHistory, "\n") or "None yet", ["inline"] = true}
+            {["name"] = "👤 Player", ["value"] = "`" .. player.Name .. "`", ["inline"] = true},
+            {["name"] = "📊 Session", ["value"] = "Gained: **" .. sessionRaised .. "**", ["inline"] = true},
+            {["name"] = "🎯 Goals", ["value"] = getGoalString(), ["inline"] = false}
         },
-        ["footer"] = {["text"] = "Executor: " .. executor .. " | JobId: " .. game.JobId},
+        ["footer"] = {["text"] = "Executor: " .. executor .. " | ID: " .. tostring(CONFIG.PlaceID)},
         ["timestamp"] = DateTime.now():ToIsoDate()
     }
     
@@ -131,11 +113,14 @@ end
 --// CORE LOGIC
 local function setupEnvironment()
     if CONFIG.LowGraphics then
-        Lighting.GlobalShadows = false
-        Lighting.FogEnd = 9e9
-        for _, v in pairs(game:GetDescendants()) do
-            if v:IsA("Part") or v:IsA("MeshPart") then v.Material = Enum.Material.SmoothPlastic end
-        end
+        pcall(function()
+            Lighting.GlobalShadows = false
+            for _, v in pairs(game:GetDescendants()) do
+                if v:IsA("Part") or v:IsA("MeshPart") then 
+                    v.Material = Enum.Material.SmoothPlastic 
+                end
+            end
+        end)
     end
 end
 
@@ -149,9 +134,13 @@ local function say(msg)
 end
 
 local function claimAndPark()
-    local stands = workspace:WaitForChild("Stands", 20)
+    -- Some games use "Booths" instead of "Stands"
+    local stands = workspace:FindFirstChild("Stands") or workspace:FindFirstChild("Booths")
+    if not stands then return false end
+
     for _, booth in ipairs(stands:GetChildren()) do
-        if booth:FindFirstChild("ClaimedName") and booth.ClaimedName.Value == "" then
+        local claimed = booth:FindFirstChild("ClaimedName")
+        if claimed and (claimed.Value == "" or claimed.Value == nil) then
             local pPart = booth:FindFirstChild("ProxPart", true)
             local prompt = pPart and pPart:FindFirstChildOfClass("ProximityPrompt")
             
@@ -162,12 +151,9 @@ local function claimAndPark()
                 fireproximityprompt(prompt)
                 task.wait(2)
 
-                if booth.ClaimedName.Value == player.Name or booth.ClaimedName.Value == player.DisplayName then
-                    -- Face the front, move inside
-                    hrp.CFrame = pPart.CFrame * CFrame.new(0, 0, 3.5) * CFrame.Angles(0, math.pi, 0)
-                    task.wait(0.5)
-                    Players:Chat("/e dance2")
-                    createNotify("Booth Secured Successfully!")
+                if claimed.Value == player.Name or claimed.Value == player.DisplayName then
+                    hrp.CFrame = pPart.CFrame * CFrame.new(0, 0, 3) * CFrame.Angles(0, math.pi, 0)
+                    say("/e dance2")
                     sendRichWebhook("Booth Claimed", 3066993)
                     return true
                 end
@@ -180,7 +166,6 @@ end
 --// EXECUTION
 setupEnvironment()
 task.spawn(function()
-    createNotify("Gemini Pro Initializing...")
     task.wait(3)
     
     if claimAndPark() then
@@ -190,52 +175,41 @@ task.spawn(function()
             timer = timer + 1
             
             -- Donation Detection
-            local currentRaised = player.leaderstats.Raised.Value
-            if currentRaised > lastRaised then
-                local gained = currentRaised - lastRaised
-                sessionRaised = sessionRaised + gained
-                
-                -- Detect Donor (Check nearest player within 20 studs)
-                local donorName = "Someone"
-                local dist = 20
-                for _, p in ipairs(Players:GetPlayers()) do
-                    if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-                        local d = (p.Character.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
-                        if d < dist then donorName = p.Name dist = d end
-                    end
+            if raisedStat then
+                local current = raisedStat.Value
+                if current > lastRaised then
+                    local gained = current - lastRaised
+                    sessionRaised = sessionRaised + gained
+                    
+                    say(string.format(CONFIG.Messages[math.random(1, #CONFIG.Messages)], gained))
+                    sendRichWebhook("Donation Received", 16776960, "Amount: **" .. gained .. "**")
+                    
+                    lastRaised = current
+                    timer = 0
+                    task.wait(1)
+                    say("/e dance2")
                 end
-                
-                logDonor(donorName, gained)
-                say(string.format(CONFIG.Messages[math.random(1, #CONFIG.Messages)], gained))
-                sendRichWebhook("Donation Received", 16776960, "Donor: **" .. donorName .. "**")
-                
-                lastRaised = currentRaised
-                timer = 0
-                task.wait(1.5)
-                Players:Chat("/e dance2")
             end
             
             if timer >= CONFIG.Countdown then
-                sendRichWebhook("Server Hopping", 15105570, "Reason: Inactivity limit reached.")
-                TeleportService:Teleport(CONFIG.PlaceID, player)
+                serverHop()
                 break
             end
         end
     else
-        createNotify("No booth found. Hopping...")
-        task.wait(2)
-        TeleportService:Teleport(CONFIG.PlaceID, player)
+        serverHop()
     end
 end)
 
 --// PERSISTENCE
 if CONFIG.RejoinEnabled then
     game:GetService("GuiService").ErrorMessageChanged:Connect(function()
-        task.wait(10)
-        TeleportService:Teleport(CONFIG.PlaceID, player)
+        task.wait(5)
+        serverHop()
     end)
 end
 
+-- Anti-AFK
 player.Idled:Connect(function()
     VirtualUser:CaptureController()
     VirtualUser:ClickButton2(Vector2.new())
