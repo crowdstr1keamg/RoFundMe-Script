@@ -2,7 +2,7 @@
 local PLACE_ID = 137532437639931
 local COUNTDOWN_TIME = 900 
 local ANTI_AFK_INTERVAL = 300
-local WEBHOOK_URL = "YOUR_WEBHOOK_HERE"
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1460256968332804291/h4SXIYVAhKsNgfnVJIgC5NPZd2VZ2b1w_xHXEBEl9jEYzXOivretwzaWzp5Rfbfq8Su2"
 
 --// SERVICES
 local Players = game:GetService("Players")
