@@ -2,156 +2,130 @@
 local PLACE_ID = 137532437639931
 local COUNTDOWN_TIME = 900 
 local ANTI_AFK_INTERVAL = 300
-local WEBHOOK_URL = "https://discord.com/api/webhooks/1460256968332804291/h4SXIYVAhKsNgfnVJIgC5NPZd2VZ2b1w_xHXEBEl9jEYzXOivretwzaWzp5Rfbfq8Su2"
+local WEBHOOK_URL = "YOUR_WEBHOOK_HERE"
 
 --// SERVICES
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local VirtualUser = game:GetService("VirtualUser")
-local MarketplaceService = game:GetService("MarketplaceService")
-local Stats = game:GetService("Stats")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
 local httpRequest = request or http_request or (syn and syn.request)
 
---// SAFETY
-if game.PlaceId ~= PLACE_ID then return end
-
---// UI MENU CREATION
-local screenGui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
-screenGui.Name = "AutoBoothMenu"
-local mainFrame = Instance.new("Frame", screenGui)
-mainFrame.Size = UDim2.new(0, 200, 0, 100)
-mainFrame.Position = UDim2.new(0.05, 0, 0.05, 0)
-mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-mainFrame.BorderSizePixel = 0
-
-local title = Instance.new("TextLabel", mainFrame)
-title.Size = UDim2.new(1, 0, 0.4, 0)
-title.Text = "Auto Booth Active"
-title.TextColor3 = Color3.new(1, 1, 1)
-title.BackgroundTransparency = 1
-
-local statusLabel = Instance.new("TextLabel", mainFrame)
-statusLabel.Size = UDim2.new(1, 0, 0.6, 0)
-statusLabel.Position = UDim2.new(0, 0, 0.4, 0)
-statusLabel.Text = "Initializing..."
-statusLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
-statusLabel.BackgroundTransparency = 1
-
---// ENHANCED WEBHOOK
-local function sendWebhook(title, desc, color)
-    if not httpRequest then return end
-    local fps = math.floor(workspace:GetRealPhysicsFPS())
-    local ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())
-    
-    pcall(function()
-        httpRequest({
-            Url = WEBHOOK_URL,
-            Method = "POST",
-            Headers = {["Content-Type"] = "application/json"},
-            Body = HttpService:JSONEncode({
-                embeds = {{
-                    title = title,
-                    description = desc,
-                    color = color or 65535,
-                    fields = {
-                        {name = "Server Info", value = "Ping: "..ping.."ms | FPS: "..fps, inline = true},
-                        {name = "Account Age", value = player.AccountAge.." days", inline = true}
-                    },
-                    footer = { text = "JobId: "..game.JobId },
-                    timestamp = DateTime.now():ToIsoDate()
-                }}
-            })
-        })
-    end)
+--// DATA HELPERS
+local function getGoals()
+    local goalData = ""
+    local goalsFolder = player:FindFirstChild("Goals")
+    if goalsFolder then
+        for i = 1, 3 do
+            local folder = goalsFolder:FindFirstChild("Goal"..i)
+            if folder and folder:FindFirstChild("Goal"..i.."Exist") and folder["Goal"..i.."Exist"].Value then
+                local name = folder["Goal"..i.."Name"].Value
+                local raised = folder["Goal"..i.."Raised"].Value
+                local max = folder["Goal"..i.."Max"].Value
+                goalData = goalData .. string.format("**%s:** %d/%d\n", name, raised, max)
+            end
+        end
+    end
+    return goalData ~= "" and goalData or "No active goals."
 end
 
---// LEADERSTATS
-local ls = player:WaitForChild("leaderstats", 15)
-local Raised = ls and ls:FindFirstChild("Raised")
-local Donated = ls and ls:FindFirstChild("Donated")
+local function getBoothText()
+    local goalsFolder = player:FindFirstChild("Goals")
+    if goalsFolder and goalsFolder:FindFirstChild("BoothText") then
+        return goalsFolder.BoothText.Value
+    end
+    return "No text set."
+end
 
---// CLAIM LOGIC FIX
-local function claimBooth(booth)
-    local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
+--// BEAUTIFIED WEBHOOK
+local function sendEnhancedWebhook(type, details)
+    if not httpRequest then return end
+    
+    local embed = {
+        ["title"] = "✨ Auto Booth System - " .. type,
+        ["color"] = type == "Donation" and 16776960 or 65535,
+        ["fields"] = {
+            {["name"] = "👤 Player Info", ["value"] = string.format("Name: `%s`\nID: `%d`\nAge: %d days", player.Name, player.UserId, player.AccountAge), ["inline"] = true},
+            {["name"] = "📊 Stats", ["value"] = string.format("Raised: %d\nDonated: %d", player.leaderstats.Raised.Value, player.leaderstats.Donated.Value), ["inline"] = true},
+            {["name"] = "📝 Booth Text", ["value"] = "```" .. getBoothText() .. "```", ["inline"] = false},
+            {["name"] = "🎯 Current Goals", ["value"] = getGoals(), ["inline"] = false}
+        },
+        ["footer"] = {["text"] = "Server: " .. game.JobId},
+        ["timestamp"] = DateTime.now():ToIsoDate()
+    }
 
-    -- Target ProxPart specifically
-    local proxPart = booth:FindFirstChild("ProxPart", true)
-    if not proxPart then return false end
-
-    -- Move to part
-    hrp.CFrame = proxPart.CFrame + Vector3.new(0, 3, 0)
-    task.wait(0.5)
-
-    local prompt = proxPart:FindFirstChildOfClass("ProximityPrompt")
-    if not prompt then return false end
-
-    -- Correctly fire prompt with HoldDuration support
-    fireproximityprompt(prompt)
-    task.wait(1.5) -- Wait for the 1 second hold duration + buffer
-
-    -- VERIFICATION: Check if actually claimed
-    local claimedVal = booth:FindFirstChild("ClaimedName")
-    if claimedVal and (claimedVal.Value == player.Name or claimedVal.Value == player.DisplayName) then
-        statusLabel.Text = "Booth Claimed!"
-        sendWebhook("✅ Booth Claimed", "Successfully claimed: "..booth.Name.."\nTotal Raised: "..Raised.Value, 5025616)
-        return true
+    if type == "Donation" then
+        table.insert(embed.fields, 2, {["name"] = "💰 Transaction", ["value"] = details, ["inline"] = false})
     end
 
+    httpRequest({
+        Url = WEBHOOK_URL,
+        Method = "POST",
+        Headers = {["Content-Type"] = "application/json"},
+        Body = HttpService:JSONEncode({embeds = {embed}})
+    })
+end
+
+--// CLAIM & POSITION
+local function claimAndOccupy(booth)
+    local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    local proxPart = booth:FindFirstChild("ProxPart", true)
+    if not (hrp and proxPart) then return false end
+
+    -- Claim
+    hrp.CFrame = proxPart.CFrame
+    task.wait(0.5)
+    fireproximityprompt(proxPart:FindFirstChildOfClass("ProximityPrompt"))
+    task.wait(1.5)
+
+    -- Verification
+    local claimedVal = booth:FindFirstChild("ClaimedName")
+    if claimedVal and claimedVal.Value ~= "" then
+        -- Move INSIDE the booth (offset from the ProxPart)
+        hrp.CFrame = proxPart.CFrame * CFrame.new(0, 0, 2) 
+        task.wait(0.5)
+        
+        -- Start Dancing
+        Players:Chat("/e dance2")
+        return true
+    end
     return false
 end
 
---// FIND BOOTH
-local function findBooth()
+--// MAIN
+task.spawn(function()
+    sendEnhancedWebhook("Script Started", "Initializing booth search...")
+    
     local stands = workspace:WaitForChild("Stands", 10)
-    for _, booth in ipairs(stands:GetChildren()) do
-        local claimed = booth:FindFirstChild("ClaimedName")
-        if claimed and claimed.Value == "" then
-            -- Additional check for VIP/Robux
-            local isVip = booth:FindFirstChild("Robux", true) or booth:FindFirstChild("VIP", true)
-            if not isVip then return booth end
+    local targetBooth = nil
+    
+    for _, b in ipairs(stands:GetChildren()) do
+        if b:FindFirstChild("ClaimedName") and b.ClaimedName.Value == "" then
+            targetBooth = b
+            break
         end
     end
-    return nil
-end
 
---// MAIN LOOP
-task.spawn(function()
-    statusLabel.Text = "Finding Booth..."
-    task.wait(2)
-    
-    local booth = findBooth()
-    if not booth then
-        sendWebhook("❌ Error", "No unclaimed booths found. Hopping...", 16711680)
-        TeleportService:Teleport(game.PlaceId, player)
-        return
-    end
-
-    if claimBooth(booth) then
-        local lastRaised = Raised.Value
+    if targetBooth and claimAndOccupy(targetBooth) then
+        local lastRaised = player.leaderstats.Raised.Value
+        
         while task.wait(1) do
-            local timeLeft = COUNTDOWN_TIME
-            -- Inner countdown loop
-            for i = COUNTDOWN_TIME, 0, -1 do
-                statusLabel.Text = "Waiting: " .. i .. "s"
-                task.wait(1)
-                if Raised.Value > lastRaised then
-                    sendWebhook("💰 Donation!", "Received: "..(Raised.Value - lastRaised).."\nNew Total: "..Raised.Value, 16776960)
-                    lastRaised = Raised.Value
-                    break -- Reset timer on donation
-                end
-                if i == 0 then
-                    sendWebhook("🔃 Server Hopping", "No donations for 15 mins.", 3447003)
-                    TeleportService:Teleport(game.PlaceId, player)
-                end
+            if player.leaderstats.Raised.Value > lastRaised then
+                local amount = player.leaderstats.Raised.Value - lastRaised
+                local msg = "Thank you so much for the " .. amount .. " Robux! I really appreciate it!"
+                
+                -- Chat & Webhook
+                ReplicatedStorage.DefaultChatSystemChatEvents.SayMessageRequest:FireServer(msg, "All")
+                sendEnhancedWebhook("Donation", "Received **" .. amount .. "** Robux!")
+                
+                lastRaised = player.leaderstats.Raised.Value
+                Players:Chat("/e dance2") -- Keep dancing after thanking
             end
         end
     else
-        statusLabel.Text = "Claim Failed. Hopping..."
-        task.wait(2)
         TeleportService:Teleport(game.PlaceId, player)
     end
 end)
