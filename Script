@@ -1,26 +1,11 @@
 --[[
-    💎 GEMFUND ULTRA V1.1
-    - New: 10s Initial Boot Delay (Prevents "nil" errors on join).
-    - New: Blacklist system (Skips booths that fail to claim).
-    - Fix: 5-stud Proximity Sensor with 1s Hold support.
+     RoFundMe - The Automated Script
+    - Put into autoexecute folder inside delta to work autonomously.
 ]]
 
---// CONFIGURATION
-local CONFIG = {
-    Webhook = "https://discord.com/api/webhooks/1460256968332804291/h4SXIYVAhKsNgfnVJIgC5NPZd2VZ2b1w_xHXEBEl9jEYzXOivretwzaWzp5Rfbfq8Su2",
-    PlaceID = 137532437639931,
-    Countdown = 600, -- 10 Minutes
-    LowGraphics = true,
-    Messages = {
-        "Thank you so much for the %d Robux!",
-        "Legend! Thanks for the %d!",
-        "I really appreciate the %d Robux donation!"
-    }
-}
-
---// SAFETY WAIT (WAIT FOR GAME LOAD)
+--// DELAY
 if not game:IsLoaded() then game.Loaded:Wait() end
-task.wait(10) -- 10s Buffer for folders/leaderstats to load
+task.wait(10) 
 
 --// SERVICES
 local Players = game:GetService("Players")
@@ -30,14 +15,15 @@ local TextChatService = game:GetService("TextChatService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
+--// VARIABLES
 local player = Players.LocalPlayer
 local sessionRaised = 0
-local hopTimer = CONFIG.Countdown
+local hopTimer = 600
 local lastRaisedValue = 0
 local blacklistedBooths = {}
 local httpRequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
 
---// RESTORED DATA SCRAPER
+--// DATA SCRAPER
 local function getUltraData()
     local data = {Goals = {}, BoothText = "No Text Set"}
     local goalsFolder = player:FindFirstChild("Goals")
@@ -57,7 +43,7 @@ local function getUltraData()
     return data
 end
 
---// RESTORED WEBHOOK FORMAT
+--// WEBHOOK
 local function sendUltraWebhook(title, color)
     if not httpRequest then return end
     local stats = getUltraData()
@@ -71,7 +57,7 @@ local function sendUltraWebhook(title, color)
     end
     pcall(function()
         httpRequest({
-            Url = CONFIG.Webhook,
+            Url = "https://discord.com/api/webhooks/1460256968332804291/h4SXIYVAhKsNgfnVJIgC5NPZd2VZ2b1w_xHXEBEl9jEYzXOivretwzaWzp5Rfbfq8Su2",
             Method = "POST",
             Headers = {["Content-Type"] = "application/json"},
             Body = HttpService:JSONEncode({
@@ -103,25 +89,16 @@ end
 local titleLbl = createLabel("💎 GEMFUND ULTRA V1.1", 10, Color3.fromRGB(0, 200, 255))
 local timerLbl = createLabel("Next Hop: 10:00", 35)
 local raisedLbl = createLabel("Raised: 0 R$", 55, Color3.fromRGB(0, 255, 120))
-local statusLbl = createLabel("Status: Booting...", 75, Color3.fromRGB(200, 200, 200))
+local statusLbl = createLabel("Status: Active", 75, Color3.fromRGB(200, 200, 200))
 
 --// TIMER LOOP
 task.spawn(function()
     while task.wait(1) do
         hopTimer = hopTimer - 1
         timerLbl.Text = string.format("Next Hop: %02d:%02d", math.floor(hopTimer/60), hopTimer%60)
-        if hopTimer <= 0 then TeleportService:Teleport(CONFIG.PlaceID, player); break end
+        if hopTimer <= 0 then TeleportService:Teleport(137532437639931, player); break end
     end
 end)
-
---// PROXIMITY HOLDER
-local function holdPrompt(prompt)
-    if not prompt or not prompt:IsA("ProximityPrompt") then return end
-    local keyCode = prompt.KeyboardKeyCode
-    VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
-    task.wait(prompt.HoldDuration + 0.1)
-    VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
-end
 
 --// PROXIMITY SENSOR (5 STUDS)
 task.spawn(function()
@@ -129,10 +106,13 @@ task.spawn(function()
         if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
             for _, v in pairs(workspace:GetDescendants()) do
                 if v:IsA("ProximityPrompt") and v.Enabled then
-                    local pPos = v.Parent:IsA("BasePart") and v.Parent.Position or v.Parent:FindFirstChildWhichIsA("BasePart") and v.Parent:FindFirstChildWhichIsA("BasePart").Position
-                    if pPos then
-                        local dist = (player.Character.HumanoidRootPart.Position - pPos).Magnitude
-                        if dist <= 5 then holdPrompt(v) end
+                    local pPart = v.Parent:FindFirstChildWhichIsA("BasePart") or v.Parent
+                    if pPart and pPart:IsA("BasePart") then
+                        if (player.Character.HumanoidRootPart.Position - pPart.Position).Magnitude <= 5 then
+                            VirtualInputManager:SendKeyEvent(true, v.KeyboardKeyCode, false, game)
+                            task.wait(v.HoldDuration + 0.1)
+                            VirtualInputManager:SendKeyEvent(false, v.KeyboardKeyCode, false, game)
+                        end
                     end
                 end
             end
@@ -140,7 +120,20 @@ task.spawn(function()
     end
 end)
 
---// SMART BOOTH FINDER
+--// BOOTH CHECKER (AM I ALREADY CLAIMED?)
+local function checkOwnBooth()
+    local stands = workspace:FindFirstChild("Stands") or workspace:FindFirstChild("Booths")
+    if not stands then return nil end
+    for _, booth in pairs(stands:GetChildren()) do
+        local owner = booth:FindFirstChild("ClaimedName")
+        if owner and (owner.Value == player.Name or owner.Value == player.DisplayName) then
+            return booth
+        end
+    end
+    return nil
+end
+
+--// BOOTH SEEKER (DENSITY BASED)
 local function getBestBooth()
     local stands = workspace:FindFirstChild("Stands") or workspace:FindFirstChild("Booths")
     if not stands then return nil end
@@ -152,8 +145,8 @@ local function getBestBooth()
                 local pPart = booth:FindFirstChild("ProxPart", true) or booth.PrimaryPart
                 local density = 0
                 for _, p in pairs(Players:GetPlayers()) do
-                    if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-                        if (p.Character.HumanoidRootPart.Position - pPart.Position).Magnitude < 45 then density = density + 1 end
+                    if p ~= player and p.Character and (p.Character.HumanoidRootPart.Position - pPart.Position).Magnitude < 45 then 
+                        density = density + 1 
                     end
                 end
                 if density > maxDensity then maxDensity = density; best = booth end
@@ -163,51 +156,50 @@ local function getBestBooth()
     return best
 end
 
---// MAIN START
+--// MAIN EXECUTION
 task.spawn(function()
     local ls = player:WaitForChild("leaderstats", 60)
     local raised = ls:WaitForChild("Raised")
     lastRaisedValue = raised.Value
-    
     sendUltraWebhook("Script Initialized", 16777215)
     
-    while true do
-        statusLbl.Text = "Status: Seeking Booth..."
-        local booth = getBestBooth()
-        
-        if booth then
-            local pPart = booth:FindFirstChild("ProxPart", true) or booth.PrimaryPart
-            player.Character.HumanoidRootPart.CFrame = pPart.CFrame
-            
-            local startTime = os.time()
-            local claimed = false
-            
-            while os.time() - startTime < 10 do
-                statusLbl.Text = "Status: Claiming (" .. (10 - (os.time() - startTime)) .. "s)"
-                task.wait(1)
-                local owner = booth:FindFirstChild("ClaimedName")
-                if owner and (owner.Value == player.Name or owner.Value == player.DisplayName) then
-                    claimed = true; break
+    -- STEP 1: Are we already at a booth?
+    local currentBooth = checkOwnBooth()
+    
+    -- STEP 2: If not, find one.
+    if not currentBooth then
+        while true do
+            statusLbl.Text = "Status: Seeking Booth..."
+            local target = getBestBooth()
+            if target then
+                local pPart = target:FindFirstChild("ProxPart", true) or target.PrimaryPart
+                player.Character.HumanoidRootPart.CFrame = pPart.CFrame
+                
+                local startTime = os.time()
+                while os.time() - startTime < 10 do
+                    statusLbl.Text = "Status: Claiming (" .. (10 - (os.time() - startTime)) .. "s)"
+                    task.wait(1)
+                    if checkOwnBooth() then currentBooth = target; break end
                 end
-            end
-            
-            if claimed then
-                player.Character.HumanoidRootPart.CFrame = pPart.CFrame * CFrame.new(0, 0, 3)
-                statusLbl.Text = "Status: Secured"
-                sendUltraWebhook("Booth Secured", 3066993)
-                TextChatService.TextChannels.RBXGeneral:SendAsync("/e dance2")
-                break 
+                
+                if currentBooth then break end
+                blacklistedBooths[target] = true
             else
-                blacklistedBooths[booth] = true
-                statusLbl.Text = "Status: Booth Failed, Blacklisting..."
-                task.wait(1)
+                statusLbl.Text = "Status: No Booths. Hopping..."
+                task.wait(2)
+                TeleportService:Teleport(137532437639931, player)
+                return
             end
-        else
-            statusLbl.Text = "Status: No Available Booths. Hopping..."
-            task.wait(2)
-            TeleportService:Teleport(CONFIG.PlaceID, player)
-            break
         end
+    end
+
+    -- STEP 3: Setup Success
+    if currentBooth then
+        local pPart = currentBooth:FindFirstChild("ProxPart", true) or currentBooth.PrimaryPart
+        player.Character.HumanoidRootPart.CFrame = pPart.CFrame * CFrame.new(0, 0, 3)
+        statusLbl.Text = "Status: Secured"
+        sendUltraWebhook("Booth Secured", 3066993)
+        TextChatService.TextChannels.RBXGeneral:SendAsync("/e dance2")
     end
 
     raised.Changed:Connect(function(val)
@@ -216,8 +208,8 @@ task.spawn(function()
             sessionRaised = sessionRaised + gained
             lastRaisedValue = val
             raisedLbl.Text = "Raised: " .. sessionRaised .. " R$"
-            hopTimer = CONFIG.Countdown
-            TextChatService.TextChannels.RBXGeneral:SendAsync(string.format(CONFIG.Messages[math.random(1, #CONFIG.Messages)], gained))
+            hopTimer = 600
+            TextChatService.TextChannels.RBXGeneral:SendAsync("Thank you for the " .. gained .. " Robux!")
             sendUltraWebhook("Donation Received!", 16776960)
         end
     end)
