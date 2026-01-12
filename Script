@@ -1,8 +1,8 @@
 --[[
     💎 GEMFUND ULTRA V1.1
-    - Fix: Restored original Webhook & Goal formatting from images.
-    - New: Booth Blacklist (Moves to a different booth if claim fails).
-    - Fix: Improved 5-stud Proximity Sensor for HoldDuration.
+    - New: 10s Initial Boot Delay (Prevents "nil" errors on join).
+    - New: Blacklist system (Skips booths that fail to claim).
+    - Fix: 5-stud Proximity Sensor with 1s Hold support.
 ]]
 
 --// CONFIGURATION
@@ -18,6 +18,10 @@ local CONFIG = {
     }
 }
 
+--// SAFETY WAIT (WAIT FOR GAME LOAD)
+if not game:IsLoaded() then game.Loaded:Wait() end
+task.wait(10) -- 10s Buffer for folders/leaderstats to load
+
 --// SERVICES
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
@@ -25,8 +29,6 @@ local TeleportService = game:GetService("TeleportService")
 local TextChatService = game:GetService("TextChatService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local VirtualInputManager = game:GetService("VirtualInputManager")
-
-if not game:IsLoaded() then game.Loaded:Wait() end
 
 local player = Players.LocalPlayer
 local sessionRaised = 0
@@ -101,7 +103,7 @@ end
 local titleLbl = createLabel("💎 GEMFUND ULTRA V1.1", 10, Color3.fromRGB(0, 200, 255))
 local timerLbl = createLabel("Next Hop: 10:00", 35)
 local raisedLbl = createLabel("Raised: 0 R$", 55, Color3.fromRGB(0, 255, 120))
-local statusLbl = createLabel("Status: Initializing...", 75, Color3.fromRGB(200, 200, 200))
+local statusLbl = createLabel("Status: Booting...", 75, Color3.fromRGB(200, 200, 200))
 
 --// TIMER LOOP
 task.spawn(function()
@@ -112,7 +114,7 @@ task.spawn(function()
     end
 end)
 
---// PROXIMITY HOLDER (FIXED)
+--// PROXIMITY HOLDER
 local function holdPrompt(prompt)
     if not prompt or not prompt:IsA("ProximityPrompt") then return end
     local keyCode = prompt.KeyboardKeyCode
@@ -121,18 +123,16 @@ local function holdPrompt(prompt)
     VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
 end
 
---// BOOTH SENSOR LOOP (5 STUDS)
+--// PROXIMITY SENSOR (5 STUDS)
 task.spawn(function()
-    while task.wait(0.5) do
+    while task.wait(0.3) do
         if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
             for _, v in pairs(workspace:GetDescendants()) do
                 if v:IsA("ProximityPrompt") and v.Enabled then
                     local pPos = v.Parent:IsA("BasePart") and v.Parent.Position or v.Parent:FindFirstChildWhichIsA("BasePart") and v.Parent:FindFirstChildWhichIsA("BasePart").Position
                     if pPos then
                         local dist = (player.Character.HumanoidRootPart.Position - pPos).Magnitude
-                        if dist <= 5 then
-                            holdPrompt(v)
-                        end
+                        if dist <= 5 then holdPrompt(v) end
                     end
                 end
             end
@@ -140,7 +140,7 @@ task.spawn(function()
     end
 end)
 
---// SMART BOOTH FINDER (EXCLUDES BLACKLISTED)
+--// SMART BOOTH FINDER
 local function getBestBooth()
     local stands = workspace:FindFirstChild("Stands") or workspace:FindFirstChild("Booths")
     if not stands then return nil end
@@ -165,14 +165,14 @@ end
 
 --// MAIN START
 task.spawn(function()
-    local ls = player:WaitForChild("leaderstats", 30)
+    local ls = player:WaitForChild("leaderstats", 60)
     local raised = ls:WaitForChild("Raised")
     lastRaisedValue = raised.Value
     
     sendUltraWebhook("Script Initialized", 16777215)
     
     while true do
-        statusLbl.Text = "Status: Finding Booth..."
+        statusLbl.Text = "Status: Seeking Booth..."
         local booth = getBestBooth()
         
         if booth then
@@ -187,8 +187,7 @@ task.spawn(function()
                 task.wait(1)
                 local owner = booth:FindFirstChild("ClaimedName")
                 if owner and (owner.Value == player.Name or owner.Value == player.DisplayName) then
-                    claimed = true
-                    break
+                    claimed = true; break
                 end
             end
             
@@ -199,12 +198,12 @@ task.spawn(function()
                 TextChatService.TextChannels.RBXGeneral:SendAsync("/e dance2")
                 break 
             else
-                statusLbl.Text = "Status: Blacklisting Booth..."
                 blacklistedBooths[booth] = true
+                statusLbl.Text = "Status: Booth Failed, Blacklisting..."
                 task.wait(1)
             end
         else
-            statusLbl.Text = "Status: No Booths. Hopping..."
+            statusLbl.Text = "Status: No Available Booths. Hopping..."
             task.wait(2)
             TeleportService:Teleport(CONFIG.PlaceID, player)
             break
