@@ -1,8 +1,8 @@
 --[[
     💎 GEMFUND ULTRA V1.1
     - Fix: Restored original Webhook & Goal formatting from images.
-    - New: 10-second fail-safe if prompt firing fails.
-    - New: VirtualInputManager for 1s HoldDuration.
+    - New: Booth Blacklist (Moves to a different booth if claim fails).
+    - Fix: Improved 5-stud Proximity Sensor for HoldDuration.
 ]]
 
 --// CONFIGURATION
@@ -32,9 +32,10 @@ local player = Players.LocalPlayer
 local sessionRaised = 0
 local hopTimer = CONFIG.Countdown
 local lastRaisedValue = 0
+local blacklistedBooths = {}
 local httpRequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
 
---// RESTORED DATA SCRAPER (MATCHING YOUR IMAGES)
+--// RESTORED DATA SCRAPER
 local function getUltraData()
     local data = {Goals = {}, BoothText = "No Text Set"}
     local goalsFolder = player:FindFirstChild("Goals")
@@ -54,7 +55,7 @@ local function getUltraData()
     return data
 end
 
---// RESTORED WEBHOOK FORMAT (MATCHING YOUR IMAGES)
+--// RESTORED WEBHOOK FORMAT
 local function sendUltraWebhook(title, color)
     if not httpRequest then return end
     local stats = getUltraData()
@@ -84,7 +85,7 @@ local function sendUltraWebhook(title, color)
     end)
 end
 
---// UI SETUP (STABLE)
+--// UI SETUP
 local sg = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
 sg.Name = "GemFundUI"; sg.ResetOnSpawn = false
 local frame = Instance.new("Frame", sg)
@@ -111,7 +112,7 @@ task.spawn(function()
     end
 end)
 
---// PROXIMITY HOLDER (FIXED FOR 1S HOLD)
+--// PROXIMITY HOLDER (FIXED)
 local function holdPrompt(prompt)
     if not prompt or not prompt:IsA("ProximityPrompt") then return end
     local keyCode = prompt.KeyboardKeyCode
@@ -120,44 +121,46 @@ local function holdPrompt(prompt)
     VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
 end
 
---// BOOTH CLAIMING WITH FAIL-SAFE
-local function claimBooth()
-    local stands = workspace:FindFirstChild("Stands") or workspace:FindFirstChild("Booths")
-    if not stands then return false end
-    
-    local foundBooth = nil
-    for _, booth in pairs(stands:GetChildren()) do
-        local owner = booth:FindFirstChild("ClaimedName")
-        if owner and (owner.Value == "" or owner.Value == nil) then
-            foundBooth = booth
-            break
-        end
-    end
-
-    if foundBooth then
-        local pPart = foundBooth:FindFirstChild("ProxPart", true) or foundBooth.PrimaryPart
-        local prompt = foundBooth:FindFirstChildOfClass("ProximityPrompt", true)
-        
-        player.Character.HumanoidRootPart.CFrame = pPart.CFrame
-        task.wait(0.5)
-
-        -- 10 Second Attempt Loop
-        local startAttempt = os.time()
-        while os.time() - startAttempt < 10 do
-            statusLbl.Text = "Status: Claiming (" .. (10 - (os.time() - startAttempt)) .. "s left)"
-            holdPrompt(prompt)
-            task.wait(1.5)
-            
-            local owner = foundBooth:FindFirstChild("ClaimedName")
-            if owner and (owner.Value == player.Name or owner.Value == player.DisplayName) then
-                player.Character.HumanoidRootPart.CFrame = pPart.CFrame * CFrame.new(0, 0, 3)
-                statusLbl.Text = "Status: Secured"
-                TextChatService.TextChannels.RBXGeneral:SendAsync("/e dance2")
-                return true
+--// BOOTH SENSOR LOOP (5 STUDS)
+task.spawn(function()
+    while task.wait(0.5) do
+        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            for _, v in pairs(workspace:GetDescendants()) do
+                if v:IsA("ProximityPrompt") and v.Enabled then
+                    local pPos = v.Parent:IsA("BasePart") and v.Parent.Position or v.Parent:FindFirstChildWhichIsA("BasePart") and v.Parent:FindFirstChildWhichIsA("BasePart").Position
+                    if pPos then
+                        local dist = (player.Character.HumanoidRootPart.Position - pPos).Magnitude
+                        if dist <= 5 then
+                            holdPrompt(v)
+                        end
+                    end
+                end
             end
         end
     end
-    return false
+end)
+
+--// SMART BOOTH FINDER (EXCLUDES BLACKLISTED)
+local function getBestBooth()
+    local stands = workspace:FindFirstChild("Stands") or workspace:FindFirstChild("Booths")
+    if not stands then return nil end
+    local best, maxDensity = nil, -1
+    for _, booth in pairs(stands:GetChildren()) do
+        if not blacklistedBooths[booth] then
+            local owner = booth:FindFirstChild("ClaimedName")
+            if owner and (owner.Value == "" or owner.Value == nil) then
+                local pPart = booth:FindFirstChild("ProxPart", true) or booth.PrimaryPart
+                local density = 0
+                for _, p in pairs(Players:GetPlayers()) do
+                    if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                        if (p.Character.HumanoidRootPart.Position - pPart.Position).Magnitude < 45 then density = density + 1 end
+                    end
+                end
+                if density > maxDensity then maxDensity = density; best = booth end
+            end
+        end
+    end
+    return best
 end
 
 --// MAIN START
@@ -168,14 +171,43 @@ task.spawn(function()
     
     sendUltraWebhook("Script Initialized", 16777215)
     
-    -- Main Claim Loop
     while true do
-        if claimBooth() then
-            sendUltraWebhook("Booth Secured", 3066993)
-            break
+        statusLbl.Text = "Status: Finding Booth..."
+        local booth = getBestBooth()
+        
+        if booth then
+            local pPart = booth:FindFirstChild("ProxPart", true) or booth.PrimaryPart
+            player.Character.HumanoidRootPart.CFrame = pPart.CFrame
+            
+            local startTime = os.time()
+            local claimed = false
+            
+            while os.time() - startTime < 10 do
+                statusLbl.Text = "Status: Claiming (" .. (10 - (os.time() - startTime)) .. "s)"
+                task.wait(1)
+                local owner = booth:FindFirstChild("ClaimedName")
+                if owner and (owner.Value == player.Name or owner.Value == player.DisplayName) then
+                    claimed = true
+                    break
+                end
+            end
+            
+            if claimed then
+                player.Character.HumanoidRootPart.CFrame = pPart.CFrame * CFrame.new(0, 0, 3)
+                statusLbl.Text = "Status: Secured"
+                sendUltraWebhook("Booth Secured", 3066993)
+                TextChatService.TextChannels.RBXGeneral:SendAsync("/e dance2")
+                break 
+            else
+                statusLbl.Text = "Status: Blacklisting Booth..."
+                blacklistedBooths[booth] = true
+                task.wait(1)
+            end
         else
-            statusLbl.Text = "Status: Claim Failed, Retrying..."
+            statusLbl.Text = "Status: No Booths. Hopping..."
             task.wait(2)
+            TeleportService:Teleport(CONFIG.PlaceID, player)
+            break
         end
     end
 
