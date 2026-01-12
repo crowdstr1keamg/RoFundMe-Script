@@ -10,152 +10,210 @@ local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local VirtualUser = game:GetService("VirtualUser")
 local TextChatService = game:GetService("TextChatService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
-local httpRequest = request or http_request or (syn and syn.request)
 
---// DATA HELPERS
-local function getGoals()
-    local goalData = ""
-    local goalsFolder = player:FindFirstChild("Goals")
-    if goalsFolder then
+--// WEBHOOK REQUEST DETECTOR (Improved)
+local httpRequest = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+
+--// UI MENU (More robust)
+local function createMenu()
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "GeminiAutoBooth"
+    sg.ResetOnSpawn = false
+    sg.Parent = player:WaitForChild("PlayerGui")
+
+    local frame = Instance.new("Frame", sg)
+    frame.Size = UDim2.new(0, 220, 0, 110)
+    frame.Position = UDim2.new(0, 10, 0.5, -55)
+    frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    frame.BorderSizePixel = 2
+
+    local title = Instance.new("TextLabel", frame)
+    title.Size = UDim2.new(1, 0, 0.3, 0)
+    title.Text = "GEMINI AUTO-BOOTH"
+    title.TextColor3 = Color3.new(1, 1, 1)
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.GothamBold
+
+    local status = Instance.new("TextLabel", frame)
+    status.Name = "StatusLabel"
+    status.Size = UDim2.new(1, 0, 0.7, 0)
+    status.Position = UDim2.new(0, 0, 0.3, 0)
+    status.Text = "Starting..."
+    status.TextColor3 = Color3.fromRGB(0, 200, 255)
+    status.BackgroundTransparency = 1
+    status.TextWrapped = true
+    
+    return status
+end
+
+local statusLabel = createMenu()
+
+--// DATA GETTERS
+local function fetchGoalData()
+    local fields = {}
+    local goals = player:FindFirstChild("Goals")
+    if goals then
         for i = 1, 3 do
-            local folder = goalsFolder:FindFirstChild("Goal"..i)
-            if folder then
-                local exists = folder:FindFirstChild("Goal"..i.."Exist")
-                if exists and exists.Value == true then
-                    local name = folder:FindFirstChild("Goal"..i.."Name") and folder["Goal"..i.."Name"].Value or "Goal"
-                    local raised = folder:FindFirstChild("Goal"..i.."Raised") and folder["Goal"..i.."Raised"].Value or 0
-                    local max = folder:FindFirstChild("Goal"..i.."Max") and folder["Goal"..i.."Max"].Value or 0
-                    goalData = goalData .. string.format("🎯 **%s**: %d/%d\n", name, raised, max)
-                end
+            local gFolder = goals:FindFirstChild("Goal"..i)
+            if gFolder and gFolder:FindFirstChild("Goal"..i.."Exist") and gFolder["Goal"..i.."Exist"].Value then
+                local gName = gFolder:FindFirstChild("Goal"..i.."Name") and gFolder["Goal"..i.."Name"].Value or "Goal "..i
+                local gRaised = gFolder:FindFirstChild("Goal"..i.."Raised") and gFolder["Goal"..i.."Raised"].Value or 0
+                local gMax = gFolder:FindFirstChild("Goal"..i.."Max") and gFolder["Goal"..i.."Max"].Value or 0
+                table.insert(fields, {
+                    ["name"] = "🎯 " .. gName,
+                    ["value"] = string.format("Progress: `%d / %d`", gRaised, gMax),
+                    ["inline"] = true
+                })
             end
         end
     end
-    return goalData ~= "" and goalData or "No active goals."
+    return fields
 end
 
-local function getBoothText()
+--// ENHANCED WEBHOOK (Discohook Style)
+local function sendWebhook(title, desc, color, extraFields)
+    if not httpRequest then 
+        warn("No 'request' function found in executor!")
+        return 
+    end
+
+    local boothText = "None"
     local goalsFolder = player:FindFirstChild("Goals")
-    local bText = goalsFolder and goalsFolder:FindFirstChild("BoothText")
-    return bText and bText.Value or "No booth text set."
-end
+    if goalsFolder and goalsFolder:FindFirstChild("BoothText") then
+        boothText = goalsFolder.BoothText.Value
+    end
 
---// ENHANCED WEBHOOK
-local function sendEnhancedWebhook(title, description, color)
-    if not httpRequest then return end
-    
-    local embed = {
-        ["title"] = title,
-        ["description"] = description,
-        ["color"] = color or 65535,
-        ["fields"] = {
-            {["name"] = "👤 User", ["value"] = string.format("`%s` (%d)", player.Name, player.UserId), ["inline"] = true},
-            {["name"] = "📈 Stats", ["value"] = string.format("Raised: %d\nDonated: %d", player.leaderstats.Raised.Value, player.leaderstats.Donated.Value), ["inline"] = true},
-            {["name"] = "📜 Booth Text", ["value"] = "```" .. getBoothText() .. "```", ["inline"] = false},
-            {["name"] = "🚀 Goal Progress", ["value"] = getGoals(), ["inline"] = false}
-        },
-        ["footer"] = {["text"] = "JobId: " .. game.JobId},
-        ["timestamp"] = DateTime.now():ToIsoDate()
+    local baseFields = {
+        {["name"] = "👤 Player", ["value"] = string.format("`%s` (%d)", player.Name, player.UserId), ["inline"] = true},
+        {["name"] = "⏳ Account Age", ["value"] = player.AccountAge .. " Days", ["inline"] = true},
+        {["name"] = "📈 Total Raised", ["value"] = tostring(player.leaderstats.Raised.Value), ["inline"] = true},
+        {["name"] = "📝 Booth Message", ["value"] = "```" .. boothText .. "```", ["inline"] = false}
     }
 
-    pcall(function()
+    -- Add Goal Fields
+    local goalFields = fetchGoalData()
+    for _, field in ipairs(goalFields) do table.insert(baseFields, field) end
+    
+    -- Add any extra custom fields (like donor info)
+    if extraFields then
+        for _, field in ipairs(extraFields) do table.insert(baseFields, field) end
+    end
+
+    local payload = HttpService:JSONEncode({
+        ["embeds"] = {{
+            ["title"] = title,
+            ["description"] = desc,
+            ["color"] = color or 65535,
+            ["fields"] = baseFields,
+            ["footer"] = {["text"] = "Auto Booth | JobId: " .. game.JobId},
+            ["timestamp"] = DateTime.now():ToIsoDate()
+        }}
+    })
+
+    local success, err = pcall(function()
         httpRequest({
             Url = WEBHOOK_URL,
             Method = "POST",
             Headers = {["Content-Type"] = "application/json"},
-            Body = HttpService:JSONEncode({embeds = {embed}})
+            Body = payload
         })
     end)
+    if not success then warn("Webhook Failed: " .. tostring(err)) end
 end
 
---// CHAT FUNCTION (Fix for modern Roblox)
-local function say(msg)
+--// CHAT UTILITY
+local function chatMessage(msg)
     if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
         local channel = TextChatService.TextChannels:FindFirstChild("RBXGeneral")
         if channel then channel:SendAsync(msg) end
     else
-        game:GetService("ReplicatedStorage").DefaultChatSystemChatEvents.SayMessageRequest:FireServer(msg, "All")
+        ReplicatedStorage:WaitForChild("DefaultChatSystemChatEvents"):WaitForChild("SayMessageRequest"):FireServer(msg, "All")
     end
 end
 
---// CLAIM & POSITION
-local function claimAndOccupy(booth)
-    local char = player.Character or player.CharacterAdded:Wait()
-    local hrp = char:WaitForChild("HumanoidRootPart")
-    
-    -- Find the prompt part
-    local proxPart = booth:FindFirstChild("ProxPart", true)
-    if not proxPart then return false end
+--// CLAIMING LOGIC (Fixed)
+local function claimBooth()
+    local stands = workspace:WaitForChild("Stands", 10)
+    for _, booth in ipairs(stands:GetChildren()) do
+        local claimed = booth:FindFirstChild("ClaimedName")
+        if claimed and claimed.Value == "" then
+            -- Find the ProxPart inside the booth
+            local proxPart = booth:FindFirstChild("ProxPart", true)
+            if proxPart then
+                local prompt = proxPart:FindFirstChildOfClass("ProximityPrompt")
+                if prompt then
+                    local hrp = player.Character:WaitForChild("HumanoidRootPart")
+                    
+                    -- Teleport exactly to the prompt
+                    hrp.CFrame = proxPart.CFrame
+                    task.wait(0.5)
+                    
+                    -- Hold duration is 1, so we must wait long enough
+                    fireproximityprompt(prompt)
+                    task.wait(1.5) 
 
-    -- Teleport to the prompt to claim
-    hrp.CFrame = proxPart.CFrame
-    task.wait(0.5)
-    
-    local prompt = proxPart:FindFirstChildOfClass("ProximityPrompt")
-    if prompt then
-        fireproximityprompt(prompt)
-        task.wait(1.5)
-    end
-
-    -- Verification check
-    local claimedVal = booth:FindFirstChild("ClaimedName")
-    if claimedVal and (claimedVal.Value == player.Name or claimedVal.Value == player.DisplayName) then
-        -- Move INSIDE (offset to be behind the counter)
-        hrp.CFrame = proxPart.CFrame * CFrame.new(0, 0, 2.5) 
-        task.wait(0.5)
-        Players:Chat("/e dance2")
-        return true
+                    -- VERIFY
+                    if claimed.Value == player.Name or claimed.Value == player.DisplayName then
+                        -- SUCCESS: Move INSIDE the booth
+                        hrp.CFrame = proxPart.CFrame * CFrame.new(0, 0, 3) 
+                        task.wait(0.2)
+                        Players:Chat("/e dance2")
+                        return true
+                    end
+                end
+            end
+        end
     end
     return false
 end
 
---// MAIN EXECUTION
+--// MAIN LOOP
 task.spawn(function()
+    statusLabel.Text = "Searching for Booth..."
     task.wait(2)
-    sendEnhancedWebhook("🟢 Script Loaded", "Searching for a booth...", 3066993)
-
-    local stands = workspace:WaitForChild("Stands", 10)
-    local myBooth = nil
-
-    -- Find an empty booth
-    for _, b in ipairs(stands:GetChildren()) do
-        local cn = b:FindFirstChild("ClaimedName")
-        if cn and cn.Value == "" then
-            myBooth = b
-            break
-        end
-    end
-
-    if myBooth and claimAndOccupy(myBooth) then
-        sendEnhancedWebhook("✅ Booth Secured", "Standing inside and dancing.", 3066993)
+    
+    if claimBooth() then
+        statusLabel.Text = "Booth Claimed! Dancing..."
+        sendWebhook("✅ Booth Secured", "Successfully claimed a booth and started dancing.", 3066993)
         
         local lastRaised = player.leaderstats.Raised.Value
         local timer = 0
-
+        
         while true do
             task.wait(1)
             timer = timer + 1
-
+            
+            -- Check for Donations
             if player.leaderstats.Raised.Value > lastRaised then
                 local gained = player.leaderstats.Raised.Value - lastRaised
-                say("Thank you so much for the " .. gained .. " Robux! You're awesome!")
-                sendEnhancedWebhook("💰 NEW DONATION", "Just received **" .. gained .. "** Robux!", 16776960)
+                local thanks = "Thank you so much for the " .. gained .. " Robux! You're the best!"
+                
+                chatMessage(thanks)
+                sendWebhook("💰 DONATION RECEIVED", "Someone just donated!", 16776960, {
+                    {["name"] = "Amount", ["value"] = "💵 " .. gained, ["inline"] = true}
+                })
                 
                 lastRaised = player.leaderstats.Raised.Value
-                timer = 0 -- Reset countdown
+                timer = 0
                 task.wait(1)
                 Players:Chat("/e dance2") -- Resume dance
             end
 
+            statusLabel.Text = "Active\nTime: " .. timer .. "s / " .. COUNTDOWN_TIME .. "s"
+
             if timer >= COUNTDOWN_TIME then
-                sendEnhancedWebhook("🔃 Server Hopping", "No donations for 15 minutes.", 15105570)
+                statusLabel.Text = "No donations. Hopping..."
+                sendWebhook("🔃 Server Hopping", "Hopping due to inactivity.", 15105570)
+                task.wait(1)
                 TeleportService:Teleport(game.PlaceId, player)
                 break
             end
         end
     else
-        sendEnhancedWebhook("❌ Failure", "Couldn't find or claim a booth. Hopping...", 15158332)
+        statusLabel.Text = "No Booth Found. Hopping..."
         task.wait(2)
         TeleportService:Teleport(game.PlaceId, player)
     end
